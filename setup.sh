@@ -68,14 +68,20 @@ detect_python() {
   [[ -n "$c" ]] && { echo "$c"; return; }
   command -v python3 || command -v python
 }
-PY="$(detect_python)"
-say "Python: $PY"
-if ! "$PY" -c 'import torch; print("   torch", torch.__version__, "cuda:", torch.cuda.is_available())' 2>/dev/null; then
-  echo "   ERROR: no python with torch found. ComfyUI cannot run." >&2
-  echo "   Set it explicitly:  COMFY_PY=/path/to/python bash setup.sh" >&2
+# explicit override wins; otherwise auto-detect by torch+pip
+if [[ -n "${COMFY_PY:-}" ]]; then
+  [[ -x "${COMFY_PY}" ]] || { echo "ERROR: COMFY_PY=$COMFY_PY is not executable" >&2; exit 1; }
+  PY="$COMFY_PY"; say "Python (COMFY_PY override): $PY"
+else
+  PY="$(detect_python)"; say "Python: $PY"
 fi
-# allow explicit override
-[[ -n "${COMFY_PY:-}" && -x "${COMFY_PY}" ]] && { PY="$COMFY_PY"; say "Python overridden: $PY"; }
+if ! "$PY" -c 'import torch; print("   torch", torch.__version__, "cuda:", torch.cuda.is_available())' 2>/dev/null; then
+  echo "   ERROR: '$PY' cannot import torch — ComfyUI will not run with it." >&2
+  echo "   Find the right interpreter and pass it explicitly, e.g.:" >&2
+  echo "     for p in \$(find / -maxdepth 7 -name 'python3.*' 2>/dev/null); do \$p -c 'import torch' 2>/dev/null && echo \$p; done" >&2
+  echo "     COMFY_PY=/that/python bash setup.sh --skip-models" >&2
+  exit 1
+fi
 
 # install a requirements file, but never touch the working CUDA torch build.
 # If the bulk install fails (e.g. one unsatisfiable pin), retry line-by-line so
