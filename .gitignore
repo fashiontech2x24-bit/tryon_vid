@@ -1,0 +1,19 @@
+# runtime
+logs/
+*.pid
+*.log
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# local scratch / large media
+*.mp4
+*.webm
+*.mov
+*.png
+*.jpg
+*.jpeg
+!web/**/*.png
