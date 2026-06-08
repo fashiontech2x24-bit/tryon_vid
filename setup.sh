@@ -82,7 +82,14 @@ fi
 # one bad entry can't block every other dependency.
 pip_install_safe() {
   local req="$1" tmp; tmp="$(mktemp)"
-  grep -viE '^[[:space:]]*(torch|torchvision|torchaudio)([][=<>!~ ]|$)' "$req" > "$tmp" || true
+  # Drop torch/torchvision/torchaudio (keep torchsde). NOTE: the boundary class
+  # must NOT contain "[=" — that starts a POSIX equivalence class and makes grep
+  # error to empty output (which silently installs nothing).
+  grep -viE '^[[:space:]]*(torch|torchvision|torchaudio)([^[:alnum:]_]|$)' "$req" > "$tmp" || true
+  if [[ ! -s "$tmp" ]]; then
+    echo "   (filter produced no lines; installing $(basename "$req") unfiltered)"
+    cp "$req" "$tmp"
+  fi
   if ! "$PY" -m pip install -q -r "$tmp"; then
     echo "   (bulk install of $(basename "$req") failed; retrying line-by-line)"
     while IFS= read -r line; do
