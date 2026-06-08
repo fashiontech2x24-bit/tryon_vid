@@ -24,7 +24,7 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMFY_DIR="${COMFY_DIR:-/workspace/ComfyUI}"
 COMFY_PORT="${COMFY_PORT:-8188}"
 APP_PORT="${APP_PORT:-8000}"
-COMFY_REF="${COMFY_REF:-master}"
+COMFY_REF="${COMFY_REF:-v0.24.0}"   # pinned stable release; override with COMFY_REF=master
 LOG_DIR="$REPO_DIR/logs"; mkdir -p "$LOG_DIR"
 
 SKIP_MODELS=0; SKIP_INSTALL=0; FRESH=0
@@ -82,10 +82,12 @@ if [[ "$SKIP_INSTALL" -eq 0 ]]; then
   [[ "$FRESH" -eq 1 ]] && { say "Removing existing $COMFY_DIR (--fresh)"; rm -rf "$COMFY_DIR"; }
 
   if [[ -d "$COMFY_DIR/.git" ]]; then
-    say "Updating ComfyUI at $COMFY_DIR"
-    git -C "$COMFY_DIR" fetch -q origin && git -C "$COMFY_DIR" checkout -q "$COMFY_REF" && git -C "$COMFY_DIR" pull -q --ff-only || true
+    say "Updating ComfyUI at $COMFY_DIR -> $COMFY_REF"
+    git -C "$COMFY_DIR" fetch -q --tags --force origin || true
+    git -C "$COMFY_DIR" checkout -q "$COMFY_REF" || true
+    git -C "$COMFY_DIR" pull -q --ff-only 2>/dev/null || true   # no-op on a detached tag
   else
-    say "Cloning ComfyUI -> $COMFY_DIR"
+    say "Cloning ComfyUI -> $COMFY_DIR ($COMFY_REF)"
     mkdir -p "$(dirname "$COMFY_DIR")"
     git clone https://github.com/comfyanonymous/ComfyUI "$COMFY_DIR"
     git -C "$COMFY_DIR" checkout -q "$COMFY_REF" || true
