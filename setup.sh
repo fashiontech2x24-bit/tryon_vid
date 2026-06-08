@@ -59,11 +59,19 @@ say "Python: $PY"
 "$PY" -c 'import torch; print("   torch", torch.__version__, "cuda:", torch.cuda.is_available())' 2>/dev/null \
   || echo "   (warning: torch not importable with this python)"
 
-# install a requirements file, but never touch the working CUDA torch build
+# install a requirements file, but never touch the working CUDA torch build.
+# If the bulk install fails (e.g. one unsatisfiable pin), retry line-by-line so
+# one bad entry can't block every other dependency.
 pip_install_safe() {
   local req="$1" tmp; tmp="$(mktemp)"
   grep -viE '^[[:space:]]*(torch|torchvision|torchaudio)([][=<>!~ ]|$)' "$req" > "$tmp" || true
-  "$PY" -m pip install -q -r "$tmp" || echo "   (some deps in $(basename "$req") failed; continuing)"
+  if ! "$PY" -m pip install -q -r "$tmp"; then
+    echo "   (bulk install of $(basename "$req") failed; retrying line-by-line)"
+    while IFS= read -r line; do
+      [[ -z "$line" || "$line" == \#* ]] && continue
+      "$PY" -m pip install -q "$line" || echo "   (skipped: $line)"
+    done < "$tmp"
+  fi
   rm -f "$tmp"
 }
 
@@ -147,6 +155,11 @@ fi
 # ----------------------------------------------------------------------------
 say "Installing demo server requirements"
 "$PY" -m pip install -q -r "$REPO_DIR/server/requirements.txt"
+
+# Recent ComfyUI master pulls in an asset DB (sqlalchemy/alembic). Install these
+# explicitly so a partial requirements install can't leave ComfyUI un-bootable.
+say "Ensuring ComfyUI runtime extras (asset DB, etc.)"
+"$PY" -m pip install -q sqlalchemy alembic || echo "   (could not install sqlalchemy/alembic)"
 
 # ----------------------------------------------------------------------------
 # 5. Start OUR ComfyUI on a free port
