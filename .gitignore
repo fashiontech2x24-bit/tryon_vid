@@ -17,3 +17,4 @@ venv/
 *.jpg
 *.jpeg
 !web/**/*.png
+localtest/

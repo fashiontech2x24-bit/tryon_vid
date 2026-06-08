@@ -42,22 +42,40 @@ say() { printf '\n\033[1;36m>> %s\033[0m\n' "$*"; }
 # ----------------------------------------------------------------------------
 # 0. Pick a python interpreter that already has CUDA torch
 # ----------------------------------------------------------------------------
+# Pick the interpreter that ACTUALLY has torch (the one ComfyUI must run with).
+# Guessing fixed paths previously chose a bare python3 with no pip/torch, so
+# every install silently no-op'd. Test import torch and require pip.
+has_torch_and_pip() { "$1" -c 'import importlib.util as u,sys; sys.exit(0 if (u.find_spec("torch") and u.find_spec("pip")) else 1)' 2>/dev/null; }
+
 detect_python() {
-  local pid exe
+  local pid exe c
+  # 1. a running ComfyUI's own interpreter wins
   pid="$(pgrep -f 'ComfyUI/main.py' | head -n1 || pgrep -f 'main.py' | head -n1 || true)"
   if [[ -n "$pid" ]]; then
     exe="$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)"
-    [[ -x "$exe" ]] && { echo "$exe"; return; }
+    [[ -x "$exe" ]] && has_torch_and_pip "$exe" && { echo "$exe"; return; }
   fi
-  for p in /venv/bin/python "$COMFY_DIR/venv/bin/python" /opt/venv/bin/python; do
-    [[ -x "$p" ]] && { echo "$p"; return; }
+  # 2. first candidate that has both torch and pip
+  for c in /opt/venv/bin/python /venv/bin/python /opt/conda/bin/python \
+           "$COMFY_DIR/venv/bin/python" /usr/local/bin/python3 /usr/bin/python3 \
+           "$(command -v python3 || true)" "$(command -v python || true)"; do
+    [[ -x "$c" ]] || continue
+    has_torch_and_pip "$c" && { echo "$c"; return; }
   done
+  # 3. last resort: any python on a filesystem scan
+  c="$(find / -maxdepth 6 -type f \( -name python3 -o -name python \) 2>/dev/null \
+        | while read -r p; do has_torch_and_pip "$p" && { echo "$p"; break; }; done)"
+  [[ -n "$c" ]] && { echo "$c"; return; }
   command -v python3 || command -v python
 }
 PY="$(detect_python)"
 say "Python: $PY"
-"$PY" -c 'import torch; print("   torch", torch.__version__, "cuda:", torch.cuda.is_available())' 2>/dev/null \
-  || echo "   (warning: torch not importable with this python)"
+if ! "$PY" -c 'import torch; print("   torch", torch.__version__, "cuda:", torch.cuda.is_available())' 2>/dev/null; then
+  echo "   ERROR: no python with torch found. ComfyUI cannot run." >&2
+  echo "   Set it explicitly:  COMFY_PY=/path/to/python bash setup.sh" >&2
+fi
+# allow explicit override
+[[ -n "${COMFY_PY:-}" && -x "${COMFY_PY}" ]] && { PY="$COMFY_PY"; say "Python overridden: $PY"; }
 
 # install a requirements file, but never touch the working CUDA torch build.
 # If the bulk install fails (e.g. one unsatisfiable pin), retry line-by-line so
@@ -158,10 +176,16 @@ fi
 say "Installing demo server requirements"
 "$PY" -m pip install -q -r "$REPO_DIR/server/requirements.txt"
 
-# Recent ComfyUI master pulls in an asset DB (sqlalchemy/alembic). Install these
-# explicitly so a partial requirements install can't leave ComfyUI un-bootable.
+# ComfyUI's asset DB (v0.24+) needs these at import time. Install explicitly so a
+# partial requirements install can't leave ComfyUI un-bootable, then verify.
 say "Ensuring ComfyUI runtime extras (asset DB, etc.)"
-"$PY" -m pip install -q sqlalchemy alembic || echo "   (could not install sqlalchemy/alembic)"
+"$PY" -m pip install -q filelock sqlalchemy alembic pydantic-settings \
+  || echo "   (could not install asset-db extras)"
+if "$PY" -c 'import filelock, sqlalchemy, alembic, pydantic_settings' 2>/dev/null; then
+  echo "   asset-db imports OK"
+else
+  echo "   WARNING: asset-db deps still not importable by $PY — ComfyUI will crash." >&2
+fi
 
 # ----------------------------------------------------------------------------
 # 5. Start OUR ComfyUI on a free port
