@@ -176,15 +176,21 @@ fi
 say "Installing demo server requirements"
 "$PY" -m pip install -q -r "$REPO_DIR/server/requirements.txt"
 
-# ComfyUI's asset DB (v0.24+) needs these at import time. Install explicitly so a
-# partial requirements install can't leave ComfyUI un-bootable, then verify.
-say "Ensuring ComfyUI runtime extras (asset DB, etc.)"
-"$PY" -m pip install -q filelock sqlalchemy alembic pydantic-settings \
-  || echo "   (could not install asset-db extras)"
-if "$PY" -c 'import filelock, sqlalchemy, alembic, pydantic_settings' 2>/dev/null; then
-  echo "   asset-db imports OK"
+# ALWAYS (re)install ComfyUI's own requirements into the runtime python — even
+# with --skip-comfy-install — so the full dependency set (comfy-aimdo,
+# comfy-kitchen, blake3, asset-DB libs, ...) is guaranteed present. pip is a
+# no-op when already satisfied, so this is cheap on repeat runs.
+if [[ -f "$COMFY_DIR/requirements.txt" ]]; then
+  say "Ensuring ComfyUI's full requirements are installed in $PY"
+  pip_install_safe "$COMFY_DIR/requirements.txt"
+fi
+"$PY" -m pip install -q blake3 || true   # sometimes optional in older pins
+# Verify the import chain that has bitten us before declaring victory.
+if "$PY" -c 'import filelock, sqlalchemy, alembic, pydantic_settings, blake3, comfy_aimdo, comfy_kitchen' 2>/dev/null; then
+  echo "   ComfyUI core deps import OK"
 else
-  echo "   WARNING: asset-db deps still not importable by $PY — ComfyUI will crash." >&2
+  echo "   WARNING: some ComfyUI deps still not importable by $PY — it may crash." >&2
+  "$PY" -c 'import comfy_aimdo' 2>&1 | tail -1 >&2 || true
 fi
 
 # ----------------------------------------------------------------------------
