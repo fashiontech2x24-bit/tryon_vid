@@ -12,11 +12,16 @@ Browser (web/index.html)
 FastAPI app  :8000   (server/app.py)
    │  /api/generate  /api/status/{id}  /api/preview/{id}  /api/result/{id}
    ▼
-ComfyUI       :8188  (Vast.ai template; managed by setup.sh)
-   models/  ← download_v2v.sh        workflow_api.json ← the graph driven per request
+ComfyUI      :8188   (OUR own clone, started by setup.sh on a free port)
+   models/  ← reused via extra_model_paths.yaml / download_v2v.sh
+   workflow_api.json ← the graph driven per request
 ```
 
-## Run on a Vast.ai ComfyUI instance
+We install and run our **own** ComfyUI (not the Vast template's) so versions,
+custom nodes, and the listening port are under our control. Models already on
+the box are reused — no re-download.
+
+## Run on a Vast.ai instance
 
 ```bash
 git clone <this-repo> tryon_vid
@@ -25,17 +30,20 @@ bash setup.sh
 ```
 
 `setup.sh` will:
-1. locate ComfyUI + its python venv,
-2. install the **VideoHelperSuite** custom node (`VHS_LoadVideo`),
-3. download all Wan VACE models (`download_v2v.sh`),
+1. pick a python that already has CUDA torch,
+2. clone **ComfyUI** to `$COMFY_DIR` (default `/workspace/ComfyUI`) + install
+   **ComfyUI-Manager** and **VideoHelperSuite** (`VHS_LoadVideo`) — keeping the
+   existing torch build untouched,
+3. reuse existing models via `extra_model_paths.yaml` (else download them),
 4. install the server deps,
-5. (re)start ComfyUI headless on `127.0.0.1:8188`,
-6. launch the demo on `0.0.0.0:8000`.
+5. start our ComfyUI headless on a free port (`COMFY_PORT`, auto-bumps if busy),
+6. launch the demo on `0.0.0.0:8000`, pointed at our ComfyUI.
 
-Then open the demo via the Vast.ai **mapped address for port 8000**.
-Expose port `8000` in the instance config (Docker `-p 8000:8000` or the
-template's open-ports field). Useful flags: `APP_PORT=9000 bash setup.sh`,
-`--skip-models`, `--no-comfy-restart`.
+Then open the demo via the Vast.ai **mapped address for port 8000** (expose
+port `8000` in the instance config). Stop everything with `bash stop.sh`.
+
+Env / flags: `COMFY_DIR=`, `COMFY_PORT=`, `APP_PORT=`, `COMFY_REF=`,
+`--skip-models`, `--skip-comfy-install`, `--fresh`.
 
 ## Files
 
@@ -45,7 +53,8 @@ template's open-ports field). Useful flags: `APP_PORT=9000 bash setup.sh`,
 | `server/app.py` | FastAPI: upload → patch workflow → queue → track progress → serve mp4 |
 | `server/comfy_client.py` | ComfyUI HTTP/WS wrapper (upload, prompt, ws progress, history, view) |
 | `web/index.html` | the demo UI (no build step) |
-| `setup.sh` | one-shot bootstrap on the instance |
+| `setup.sh` | clone+run our own ComfyUI (+Manager+VHS), reuse models, start app |
+| `stop.sh` | stop the ComfyUI + app that setup.sh started |
 | `download_v2v.sh` | model downloader (unchanged) |
 
 ## Updating the workflow
