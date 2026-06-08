@@ -55,15 +55,17 @@ detect_python() {
     exe="$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)"
     [[ -x "$exe" ]] && has_torch_and_pip "$exe" && { echo "$exe"; return; }
   fi
-  # 2. first candidate that has both torch and pip
-  for c in /opt/venv/bin/python /venv/bin/python /opt/conda/bin/python \
-           "$COMFY_DIR/venv/bin/python" /usr/local/bin/python3 /usr/bin/python3 \
-           "$(command -v python3 || true)" "$(command -v python || true)"; do
+  # 2. first candidate that has both torch and pip (venvs are often /venv/<name>)
+  for c in /venv/main/bin/python3.12 /venv/main/bin/python3 /venv/main/bin/python \
+           /venv/*/bin/python3.12 /venv/*/bin/python3 \
+           /opt/venv/bin/python /opt/conda/bin/python "$COMFY_DIR/venv/bin/python" \
+           /usr/local/bin/python3.12 /usr/bin/python3.12 /usr/local/bin/python3 /usr/bin/python3 \
+           "$(command -v python3.12 || true)" "$(command -v python3 || true)" "$(command -v python || true)"; do
     [[ -x "$c" ]] || continue
     has_torch_and_pip "$c" && { echo "$c"; return; }
   done
-  # 3. last resort: any python on a filesystem scan
-  c="$(find / -maxdepth 6 -type f \( -name python3 -o -name python \) 2>/dev/null \
+  # 3. last resort: scan real interpreters under any */bin/ (skip dpkg scripts)
+  c="$(find / -maxdepth 7 -type f -path '*/bin/*' \( -name 'python3.*' -o -name python3 -o -name python \) 2>/dev/null \
         | while read -r p; do has_torch_and_pip "$p" && { echo "$p"; break; }; done)"
   [[ -n "$c" ]] && { echo "$c"; return; }
   command -v python3 || command -v python
