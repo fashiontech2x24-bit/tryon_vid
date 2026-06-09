@@ -159,7 +159,7 @@ MODELS_COMFY="$COMFY_DIR"
 EXISTING_MODELS="$(detect_existing_models || true)"
 if [[ -n "$EXISTING_MODELS" ]]; then
   MODELS_COMFY="$EXISTING_MODELS"
-  say "Reusing existing models from $EXISTING_MODELS (extra_model_paths.yaml)"
+  say "Reusing existing models from $EXISTING_MODELS"
   cat > "$COMFY_DIR/extra_model_paths.yaml" <<YAML
 tryon_reuse:
     base_path: $EXISTING_MODELS
@@ -171,6 +171,17 @@ tryon_reuse:
     unet: models/diffusion_models
     loras: models/loras
 YAML
+  # extra_model_paths.yaml can be flaky across ComfyUI versions; symlink the
+  # model folders directly into our ComfyUI/models as the reliable path.
+  mkdir -p "$COMFY_DIR/models"
+  for sub in diffusion_models text_encoders vae loras checkpoints clip_vision controlnet upscale_models; do
+    src="$EXISTING_MODELS/models/$sub"; dst="$COMFY_DIR/models/$sub"
+    [[ -d "$src" ]] || continue
+    [[ -L "$dst" ]] && continue          # already linked
+    [[ -d "$dst" ]] && rmdir "$dst" 2>/dev/null   # remove only if empty (don't clobber real models)
+    [[ -e "$dst" ]] || ln -s "$src" "$dst"
+  done
+  echo "   linked model folders: $(ls -d "$COMFY_DIR"/models/*/ 2>/dev/null | wc -l) present"
 else
   say "No pre-existing models found — will download into $COMFY_DIR/models"
 fi
