@@ -172,16 +172,22 @@ tryon_reuse:
     loras: models/loras
 YAML
   # extra_model_paths.yaml can be flaky across ComfyUI versions; symlink the
-  # model folders directly into our ComfyUI/models as the reliable path.
+  # model FILES into our ComfyUI/models (leaves ComfyUI's placeholder dirs/files
+  # intact, never clobbers a real model, and avoids rmdir under `set -e`).
   mkdir -p "$COMFY_DIR/models"
+  linked=0
   for sub in diffusion_models text_encoders vae loras checkpoints clip_vision controlnet upscale_models; do
-    src="$EXISTING_MODELS/models/$sub"; dst="$COMFY_DIR/models/$sub"
+    src="$EXISTING_MODELS/models/$sub"
     [[ -d "$src" ]] || continue
-    [[ -L "$dst" ]] && continue          # already linked
-    [[ -d "$dst" ]] && rmdir "$dst" 2>/dev/null   # remove only if empty (don't clobber real models)
-    [[ -e "$dst" ]] || ln -s "$src" "$dst"
+    mkdir -p "$COMFY_DIR/models/$sub"
+    for f in "$src"/*; do
+      [[ -e "$f" ]] || continue                 # empty dir -> literal glob, skip
+      tgt="$COMFY_DIR/models/$sub/$(basename "$f")"
+      [[ -e "$tgt" || -L "$tgt" ]] && continue   # already present/linked
+      ln -s "$f" "$tgt" && linked=$((linked+1)) || true
+    done
   done
-  echo "   linked model folders: $(ls -d "$COMFY_DIR"/models/*/ 2>/dev/null | wc -l) present"
+  echo "   linked $linked model files from $EXISTING_MODELS/models"
 else
   say "No pre-existing models found — will download into $COMFY_DIR/models"
 fi
