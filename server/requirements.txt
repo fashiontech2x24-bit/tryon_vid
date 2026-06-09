@@ -3,3 +3,8 @@ uvicorn[standard]>=0.29
 requests>=2.31
 websocket-client>=1.7
 python-multipart>=0.0.9
+# pipeline: pose retargeting (preprocess) + boomerang (postprocess)
+numpy>=1.25
+opencv-python-headless>=4.8
+rtmlib>=0.0.13
+onnxruntime>=1.17

@@ -3,26 +3,25 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Wan VACE — Video Try-On Demo</title>
+<title>Wan VACE — Video Try-On</title>
 <style>
-  :root { --bg:#0e1116; --card:#171b22; --line:#262c36; --fg:#e6e9ef; --mut:#8b94a3; --acc:#4f8cff; --err:#ff6b6b; }
+  :root { --bg:#0e1116; --card:#171b22; --line:#262c36; --fg:#e6e9ef; --mut:#8b94a3; --acc:#4f8cff; --ok:#6fd28a; --err:#ff6b6b; }
   * { box-sizing: border-box; }
   body { margin:0; font:15px/1.5 system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--fg); }
-  .wrap { max-width: 980px; margin: 0 auto; padding: 28px 18px 60px; }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 28px 18px 60px; }
   h1 { font-size: 22px; margin: 0 0 4px; }
   .sub { color: var(--mut); margin: 0 0 22px; font-size: 13px; }
-  .grid { display:grid; grid-template-columns: 1fr 1fr; gap:18px; }
-  @media (max-width:760px){ .grid { grid-template-columns: 1fr; } }
-  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; }
-  label { display:block; font-size:12px; color:var(--mut); margin:0 0 6px; text-transform:uppercase; letter-spacing:.04em; }
-  input[type=file], textarea, input[type=number] {
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; margin-bottom:18px; }
+  label { display:block; font-size:12px; color:var(--mut); margin:14px 0 6px; text-transform:uppercase; letter-spacing:.04em; }
+  label:first-child { margin-top:0; }
+  input[type=file], textarea, input[type=number], select {
     width:100%; background:#0f131a; border:1px solid var(--line); color:var(--fg);
     border-radius:8px; padding:9px 10px; font:inherit;
   }
-  textarea { resize:vertical; min-height:70px; }
+  textarea { resize:vertical; min-height:64px; }
   .drop { border:1.5px dashed var(--line); border-radius:10px; padding:14px; text-align:center; color:var(--mut); cursor:pointer; }
   .drop.has { border-color:var(--acc); color:var(--fg); }
-  video, img.prev { width:100%; border-radius:8px; margin-top:10px; background:#000; max-height:340px; object-fit:contain; }
+  img.prev, video { width:100%; border-radius:8px; margin-top:10px; background:#000; max-height:360px; object-fit:contain; }
   button { background:var(--acc); color:#fff; border:0; border-radius:9px; padding:12px 18px; font:inherit; font-weight:600; cursor:pointer; }
   button:disabled { opacity:.5; cursor:not-allowed; }
   .row { display:flex; gap:14px; align-items:center; margin-top:18px; flex-wrap:wrap; }
@@ -32,60 +31,84 @@
   .bar { height:10px; background:#0f131a; border:1px solid var(--line); border-radius:6px; overflow:hidden; }
   .bar > i { display:block; height:100%; width:0; background:var(--acc); transition:width .3s; }
   .stage { font-size:13px; color:var(--mut); margin-top:8px; }
-  .err { color:var(--err); }
-  .pill { font-size:12px; padding:3px 8px; border-radius:20px; border:1px solid var(--line); color:var(--mut); }
+  .err { color:var(--err); } .ok { color:var(--ok); }
+  .pill { font-size:12px; padding:3px 8px; border-radius:20px; border:1px solid var(--line); color:var(--mut); margin-left:6px; }
   a.dl { color:var(--acc); text-decoration:none; font-weight:600; }
+  .thumbs { display:flex; gap:14px; flex-wrap:wrap; }
+  .thumbs > div { flex:1 1 220px; }
+  .thumbs label { margin-top:0; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>Wan 2.1 VACE — Video Try-On</h1>
-  <p class="sub">Reference image + control video → generated video. <span id="health" class="pill">checking…</span></p>
+  <p class="sub">Upload a reference image, pick a motion preset → control video, generation, and seamless boomerang run automatically.
+    <span id="health" class="pill">checking…</span></p>
 
-  <div class="grid">
-    <div class="card">
-      <label>Reference image</label>
-      <div class="drop" id="imgDrop">Click or drop an image</div>
-      <input id="imgFile" type="file" accept="image/*" hidden />
-      <img id="imgPrev" class="prev" hidden />
+  <div class="card">
+    <label>Reference image</label>
+    <div class="drop" id="imgDrop">Click or drop an image</div>
+    <input id="imgFile" type="file" accept="image/*" hidden />
+    <img id="imgPrev" class="prev" hidden />
+
+    <label>Motion preset <span style="text-transform:none;color:var(--mut)">— server-side, no upload</span></label>
+    <select id="preset"></select>
+
+    <details>
+      <summary>Pose retargeting options</summary>
+      <div class="adv">
+        <div><label>Pose mode</label>
+          <select id="pose_mode"><option value="relative">relative</option><option value="absolute">absolute</option></select></div>
+        <div><label>Root motion</label><input id="root_motion" type="number" step="0.1" placeholder="1.0" /></div>
+        <div><label>Smoothing</label><input id="smoothing" type="number" step="0.05" placeholder="0.4" /></div>
+        <div><label>Foreshorten</label><input id="foreshorten" type="number" step="0.1" placeholder="0.0" /></div>
+        <div><label>Blend frames</label><input id="blend_frames" type="number" step="1" placeholder="0" /></div>
+      </div>
+    </details>
+
+    <details>
+      <summary>Generation (Wan VACE) options</summary>
+      <div style="margin-top:12px"><label>Positive prompt</label><textarea id="positive"></textarea></div>
+      <div class="adv">
+        <div><label>Width</label><input id="width" type="number" placeholder="768" /></div>
+        <div><label>Height</label><input id="height" type="number" placeholder="1024" /></div>
+        <div><label>Frames</label><input id="length" type="number" placeholder="29" /></div>
+        <div><label>FPS</label><input id="fps" type="number" placeholder="12" /></div>
+        <div><label>Steps</label><input id="steps" type="number" placeholder="4" /></div>
+        <div><label>CFG</label><input id="cfg" type="number" step="0.1" placeholder="1" /></div>
+        <div><label>LoRA strength</label><input id="lora_strength" type="number" step="0.05" placeholder="0.3" /></div>
+        <div><label>Shift</label><input id="shift" type="number" step="0.5" placeholder="4" /></div>
+        <div><label>Seed (blank=random)</label><input id="seed" type="number" placeholder="random" /></div>
+      </div>
+    </details>
+
+    <details>
+      <summary>Boomerang (postprocess) options</summary>
+      <div class="adv">
+        <div><label>Window</label><input id="window" type="number" placeholder="3" min="1" /></div>
+        <div><label>CRF</label><input id="crf" type="number" placeholder="16" min="0" max="51" /></div>
+        <div><label>Seamless loop</label><select id="loop"><option value="true">yes</option><option value="false">no</option></select></div>
+      </div>
+    </details>
+
+    <div class="row">
+      <button id="go">Generate</button>
+      <span id="stageWrap" class="stage" hidden></span>
     </div>
-    <div class="card">
-      <label>Control video</label>
-      <div class="drop" id="vidDrop">Click or drop a video</div>
-      <input id="vidFile" type="file" accept="video/*" hidden />
-      <video id="vidPrev" controls muted hidden></video>
-    </div>
+    <div class="bar" id="barWrap" hidden style="margin-top:12px"><i id="bar"></i></div>
   </div>
 
-  <details>
-    <summary>Advanced settings (tuning)</summary>
-    <div style="margin-top:12px">
-      <label>Positive prompt</label>
-      <textarea id="positive"></textarea>
-    </div>
-    <div class="adv">
-      <div><label>Width</label><input id="width" type="number" placeholder="768" /></div>
-      <div><label>Height</label><input id="height" type="number" placeholder="1024" /></div>
-      <div><label>Frames</label><input id="length" type="number" placeholder="29" /></div>
-      <div><label>FPS</label><input id="fps" type="number" placeholder="12" /></div>
-      <div><label>Steps</label><input id="steps" type="number" placeholder="4" /></div>
-      <div><label>CFG</label><input id="cfg" type="number" step="0.1" placeholder="1" /></div>
-      <div><label>LoRA strength</label><input id="lora_strength" type="number" step="0.05" placeholder="0.3" /></div>
-      <div><label>Shift</label><input id="shift" type="number" step="0.5" placeholder="4" /></div>
-      <div><label>Seed (blank=random)</label><input id="seed" type="number" placeholder="random" /></div>
-    </div>
-  </details>
-
-  <div class="row">
-    <button id="go">Generate video</button>
-    <span id="stageWrap" class="stage" hidden></span>
-  </div>
-  <div class="bar" id="barWrap" hidden style="margin-top:12px"><i id="bar"></i></div>
-
-  <div class="card" id="resultCard" hidden style="margin-top:18px">
-    <label>Result</label>
+  <div class="card" id="resultCard" hidden>
+    <label>Result — boomerang</label>
     <video id="outVid" controls autoplay loop muted></video>
     <div class="row"><a id="dl" class="dl" href="#" download>⬇ Download mp4</a></div>
+    <details>
+      <summary>Intermediate stages</summary>
+      <div class="thumbs" style="margin-top:12px">
+        <div><label>Control video (pose)</label><video id="ctrlVid" controls loop muted></video></div>
+        <div><label>Raw generated clip</label><video id="genVid" controls loop muted></video></div>
+      </div>
+    </details>
   </div>
 </div>
 
@@ -94,81 +117,75 @@ const DEFAULT_POSITIVE = "High-fidelity, cinematic fashion video of the model fr
 const $ = id => document.getElementById(id);
 $("positive").value = DEFAULT_POSITIVE;
 
-function wireDrop(dropId, inputId, kind) {
-  const drop = $(dropId), input = $(inputId);
-  drop.onclick = () => input.click();
-  ["dragover"].forEach(e => drop.addEventListener(e, ev => { ev.preventDefault(); drop.classList.add("has"); }));
-  drop.addEventListener("dragleave", () => drop.classList.remove("has"));
-  drop.addEventListener("drop", ev => { ev.preventDefault(); input.files = ev.dataTransfer.files; input.onchange(); });
-  input.onchange = () => {
-    const f = input.files[0]; if (!f) return;
-    drop.classList.add("has"); drop.textContent = f.name;
-    const url = URL.createObjectURL(f);
-    if (kind === "img") { $("imgPrev").src = url; $("imgPrev").hidden = false; }
-    else { $("vidPrev").src = url; $("vidPrev").hidden = false; }
-  };
-}
-wireDrop("imgDrop", "imgFile", "img");
-wireDrop("vidDrop", "vidFile", "vid");
+const imgDrop = $("imgDrop"), imgFile = $("imgFile");
+imgDrop.onclick = () => imgFile.click();
+imgDrop.addEventListener("dragover", e => { e.preventDefault(); imgDrop.classList.add("has"); });
+imgDrop.addEventListener("dragleave", () => imgDrop.classList.remove("has"));
+imgDrop.addEventListener("drop", e => { e.preventDefault(); imgFile.files = e.dataTransfer.files; imgFile.onchange(); });
+imgFile.onchange = () => {
+  const f = imgFile.files[0]; if (!f) return;
+  imgDrop.classList.add("has"); imgDrop.textContent = f.name;
+  $("imgPrev").src = URL.createObjectURL(f); $("imgPrev").hidden = false;
+};
 
-async function checkHealth() {
+async function refresh() {
   try {
-    const r = await fetch("/api/health"); const j = await r.json();
+    const j = await (await fetch("/api/health")).json();
     const el = $("health");
-    el.textContent = j.comfy_up ? "ComfyUI ready" : "ComfyUI offline";
-    el.style.color = j.comfy_up ? "#6fd28a" : "var(--err)";
+    el.textContent = (j.comfy_up ? "ComfyUI ready" : "ComfyUI offline") + " · pose:" + j.device;
+    el.style.color = j.comfy_up ? "var(--ok)" : "var(--err)";
+    if (j.presets && $("preset").options.length === 0)
+      $("preset").innerHTML = j.presets.map(p => `<option>${p}</option>`).join("")
+        || `<option disabled>no presets in assets/motion_presets/</option>`;
   } catch { $("health").textContent = "server unreachable"; }
 }
-checkHealth(); setInterval(checkHealth, 8000);
+refresh(); setInterval(refresh, 8000);
 
-const OPT_FIELDS = ["positive","width","height","length","fps","steps","cfg","lora_strength","shift","seed"];
+const FIELDS = ["preset","pose_mode","root_motion","smoothing","foreshorten","blend_frames",
+  "positive","width","height","length","fps","steps","cfg","lora_strength","shift","seed",
+  "window","crf","loop"];
 
 $("go").onclick = async () => {
-  if (!$("imgFile").files[0] || !$("vidFile").files[0]) { alert("Pick both an image and a control video."); return; }
+  if (!imgFile.files[0]) { alert("Pick a reference image."); return; }
+  if (!$("preset").value) { alert("No motion preset available."); return; }
   const fd = new FormData();
-  fd.append("image", $("imgFile").files[0]);
-  fd.append("video", $("vidFile").files[0]);
-  OPT_FIELDS.forEach(k => fd.append(k, $(k).value));
+  fd.append("image", imgFile.files[0]);
+  FIELDS.forEach(k => fd.append(k, $(k).value));
 
-  $("go").disabled = true;
-  $("resultCard").hidden = true;
+  $("go").disabled = true; $("resultCard").hidden = true;
   $("barWrap").hidden = false; $("bar").style.width = "0%";
   setStage("Uploading…");
 
   let job;
   try {
     const r = await fetch("/api/generate", { method: "POST", body: fd });
-    if (!r.ok) throw new Error((await r.json().catch(()=>({}))).detail || r.statusText);
-    job = (await r.json()).job_id;
-  } catch (e) { fail("Submit failed: " + e.message); return; }
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || r.statusText);
+    job = d.job_id;
+  } catch (e) { return fail("Submit failed: " + e.message); }
   poll(job);
 };
 
-function setStage(text, isErr=false) {
-  const w = $("stageWrap"); w.hidden = false; w.textContent = text;
-  w.className = "stage" + (isErr ? " err" : "");
-}
-function fail(msg) { setStage(msg, true); $("go").disabled = false; $("barWrap").hidden = true; }
+function setStage(t, cls) { const w = $("stageWrap"); w.hidden = false; w.textContent = t; w.className = "stage" + (cls ? " " + cls : ""); }
+function fail(m) { setStage(m, "err"); $("go").disabled = false; $("barWrap").hidden = true; }
 
 async function poll(job) {
   try {
-    const r = await fetch("/api/status/" + job);
-    const j = await r.json();
+    const j = await (await fetch("/api/status/" + job)).json();
     $("bar").style.width = Math.round((j.progress || 0) * 100) + "%";
     if (j.status === "error") return fail("Error: " + (j.error || "unknown"));
     if (j.status === "done") {
-      setStage("Done.");
+      setStage("Done." + (j.warning ? "  (" + j.warning + ")" : ""), "ok");
       $("go").disabled = false;
-      $("outVid").src = "/api/preview/" + job;
-      $("dl").href = "/api/result/" + job;
+      $("outVid").src = j.output_url; $("dl").href = j.output_url;
+      if (j.control_url) $("ctrlVid").src = j.control_url;
+      if (j.generated_url) $("genVid").src = j.generated_url;
       $("resultCard").hidden = false;
       return;
     }
     setStage(j.stage || j.status || "working…");
     setTimeout(() => poll(job), 1200);
-  } catch (e) {
-    setTimeout(() => poll(job), 2000); // transient; keep trying
-  }
+  } catch { setTimeout(() => poll(job), 2000); }
 }
 </script>
 </body>

@@ -18,3 +18,12 @@ venv/
 *.jpeg
 !web/**/*.png
 localtest/
+
+# pipeline runtime artifacts (do not commit)
+runs/
+.pose_cache/
+models/
+
+# but DO commit the bundled motion presets despite the *.mp4 rule above
+!assets/motion_presets/
+!assets/motion_presets/*.mp4

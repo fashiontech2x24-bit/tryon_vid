@@ -188,8 +188,24 @@ fi
 # ----------------------------------------------------------------------------
 # 4. Demo server deps
 # ----------------------------------------------------------------------------
-say "Installing demo server requirements"
+say "Installing demo server + pipeline requirements"
 "$PY" -m pip install -q -r "$REPO_DIR/server/requirements.txt"
+
+# boomerang postprocess needs ffmpeg/ffprobe on PATH
+if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
+  say "Installing ffmpeg"
+  command -v apt-get >/dev/null 2>&1 && (apt-get update -y && apt-get install -y ffmpeg) >/dev/null 2>&1 \
+    || echo "   (could not auto-install ffmpeg; install it manually for boomerang)"
+fi
+
+# Prefetch the DWPose ONNX models (~350MB) so the first request isn't slow.
+say "Prefetching DWPose models for pose retargeting"
+"$PY" - <<PYEOF || echo "   (model prefetch skipped/failed; will download on first use)"
+import sys; sys.path.insert(0, "$REPO_DIR/server/pipeline")
+import pose_retarget
+pose_retarget.ensure_dwpose_models("${DWPOSE_MODEL_DIR:-$REPO_DIR/models/dwpose}")
+print("   DWPose models ready")
+PYEOF
 
 # ALWAYS (re)install ComfyUI's own requirements into the runtime python — even
 # with --skip-comfy-install — so the full dependency set (comfy-aimdo,
