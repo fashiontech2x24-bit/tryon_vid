@@ -150,7 +150,8 @@ fi
 detect_existing_models() {
   for c in /opt/workspace-internal/ComfyUI /workspace/ComfyUI /opt/ComfyUI "$HOME/ComfyUI" /ComfyUI; do
     [[ "$c" == "$COMFY_DIR" ]] && continue
-    [[ -d "$c/models/diffusion_models" ]] && { echo "$c"; return; }
+    # require an ACTUAL diffusion model file, not just the (template-shipped) empty dir
+    compgen -G "$c/models/diffusion_models/*.safetensors" >/dev/null 2>&1 && { echo "$c"; return; }
   done
   return 1
 }
