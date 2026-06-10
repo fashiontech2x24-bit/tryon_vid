@@ -51,20 +51,8 @@
     <input id="imgFile" type="file" accept="image/*" hidden />
     <img id="imgPrev" class="prev" hidden />
 
-    <label>Motion preset <span style="text-transform:none;color:var(--mut)">— server-side, no upload</span></label>
+    <label>Control video (motion)</label>
     <select id="preset"></select>
-
-    <details>
-      <summary>Pose retargeting options</summary>
-      <div class="adv">
-        <div><label>Pose mode</label>
-          <select id="pose_mode"><option value="relative">relative</option><option value="absolute">absolute</option></select></div>
-        <div><label>Root motion</label><input id="root_motion" type="number" step="0.1" placeholder="1.0" /></div>
-        <div><label>Smoothing</label><input id="smoothing" type="number" step="0.05" placeholder="0.4" /></div>
-        <div><label>Foreshorten</label><input id="foreshorten" type="number" step="0.1" placeholder="0.0" /></div>
-        <div><label>Blend frames</label><input id="blend_frames" type="number" step="1" placeholder="0" /></div>
-      </div>
-    </details>
 
     <details>
       <summary>Generation (Wan VACE) options</summary>
@@ -141,9 +129,8 @@ async function refresh() {
 }
 refresh(); setInterval(refresh, 8000);
 
-const FIELDS = ["preset","pose_mode","root_motion","smoothing","foreshorten","blend_frames",
-  "positive","width","height","length","fps","steps","cfg","lora_strength","shift","seed",
-  "window","crf","loop"];
+const FIELDS = ["preset","positive","width","height","length","fps","steps","cfg",
+  "lora_strength","shift","seed","window","crf","loop"];
 
 $("go").onclick = async () => {
   if (!imgFile.files[0]) { alert("Pick a reference image."); return; }

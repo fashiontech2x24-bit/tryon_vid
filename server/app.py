@@ -135,13 +135,16 @@ def run_job(job_id, image_path, opts):
         control_path = run / "control.mp4"
         with POSE_LOCK:
             pipe = get_pipeline(opts["preset"])  # first call per preset estimates the clip (slow, cached)
+            # Config "E" (chosen from local testing): absolute pose, full root
+            # motion + foreshortening, short blend-in. Overridable via form, but
+            # the UI no longer sends these — E is the fixed default.
             pipe.generate(
                 str(image_path), str(control_path),
-                pose_mode=opts.get("pose_mode", "relative"),
+                pose_mode=opts.get("pose_mode") or "absolute",
                 root_motion=_fnum(opts.get("root_motion"), 1.0),
                 smoothing=_fnum(opts.get("smoothing"), 0.4),
-                foreshorten=_fnum(opts.get("foreshorten"), 0.0),
-                blend_frames=int(_fnum(opts.get("blend_frames"), 0)))
+                foreshorten=_fnum(opts.get("foreshorten"), 1.0),
+                blend_frames=int(_fnum(opts.get("blend_frames"), 8)))
         _set(job_id, control_url=f"/api/run/{job_id}/control.mp4")
 
         # -- [2] generate: drive ComfyUI / VACE -------------------------------
@@ -212,8 +215,9 @@ def presets():
 async def generate(
     image: UploadFile = File(...),
     preset: str = Form(...),
-    # preprocess (pose retarget)
-    pose_mode: str = Form("relative"),
+    # preprocess (pose retarget) — fixed to config "E" server-side; these stay
+    # accepted for power users / API callers but the UI no longer sends them.
+    pose_mode: str = Form("absolute"),
     root_motion: str = Form(""), smoothing: str = Form(""),
     foreshorten: str = Form(""), blend_frames: str = Form(""),
     # generate (VACE)
