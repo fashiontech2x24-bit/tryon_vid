@@ -4,8 +4,8 @@
 #
 # Instead of relying on the Vast.ai template's pre-installed ComfyUI, this
 # clones our OWN ComfyUI (+ ComfyUI-Manager + VideoHelperSuite) and runs it on
-# a port we control. Existing models on the box are reused via
-# extra_model_paths.yaml, so nothing is re-downloaded.
+# a port we control. Models are reused from another ComfyUI on the box if found,
+# otherwise downloaded (download_v2v.sh); a verification step lists every model.
 #
 #   git clone <repo> && cd tryon_vid && bash setup.sh
 #
@@ -201,6 +201,35 @@ if [[ "$SKIP_MODELS" -eq 1 ]]; then
 else
   say "Ensuring Wan VACE models are present (target: $MODELS_COMFY)"
   COMFYUI_DIR="$MODELS_COMFY" bash "$REPO_DIR/download_v2v.sh"
+fi
+
+# ----------------------------------------------------------------------------
+# 3b. Verify EVERY required model is present (visibility + safety gate)
+# ----------------------------------------------------------------------------
+REQUIRED_MODELS=(
+  "text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors"
+  "text_encoders/umt5_xxl_fp16.safetensors"
+  "vae/wan_2.1_vae.safetensors"
+  "diffusion_models/wan2.1_vace_1.3B_fp16.safetensors"
+  "diffusion_models/wan2.1_vace_14B_fp16.safetensors"
+  "loras/Wan21_CausVid_bidirect2_T2V_1_3B_lora_rank32.safetensors"
+  "loras/Wan21_CausVid_14B_T2V_lora_rank32.safetensors"
+)
+say "Verifying models in $MODELS_COMFY/models"
+MISSING_MODELS=0
+for m in "${REQUIRED_MODELS[@]}"; do
+  f="$MODELS_COMFY/models/$m"
+  if [[ -f "$f" ]]; then
+    printf '   [OK]   %8s  %s\n' "$(du -hL "$f" 2>/dev/null | cut -f1)" "$m"
+  else
+    printf '   [MISSING]          %s\n' "$m"; MISSING_MODELS=$((MISSING_MODELS + 1))
+  fi
+done
+if [[ "$MISSING_MODELS" -gt 0 ]]; then
+  echo "   !! $MISSING_MODELS model(s) MISSING — generation will fail." >&2
+  echo "   !! Re-run without --skip-models to download them." >&2
+else
+  echo "   all ${#REQUIRED_MODELS[@]} models present."
 fi
 
 # ----------------------------------------------------------------------------
