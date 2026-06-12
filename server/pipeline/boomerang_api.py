@@ -102,6 +102,8 @@ def boomerang(
     loop: bool = False,
     crf: int = 16,
     preset: str = "slow",
+    slowdown: float = 1.0,
+    out_fps: int = 30,
 ) -> str:
     """Create a seamless boomerang with a flow-eased apex.
 
@@ -112,6 +114,9 @@ def boomerang(
     window      : source frames on each side of the apex to retime (>=1).
     loop        : drop the final frame so the result loops perfectly.
     crf, preset : libx264 quality / speed knobs.
+    slowdown    : >1 slows the whole loop by this factor using motion-compensated
+                  frame interpolation (smooth at any factor). 1.0 = off.
+    out_fps     : output frame rate the slowed clip is interpolated to.
 
     Returns the output path.
     """
@@ -136,6 +141,12 @@ def boomerang(
     join_raw = Path(tempfile.mkstemp(suffix=".raw")[1])
     join_raw.write_bytes(b"".join(f.tobytes() for f in join))
 
+    # optional smooth slow-mo: stretch time then motion-interpolate to out_fps.
+    slow_tail = ""
+    if slowdown and abs(slowdown - 1.0) > 1e-3:
+        slow_tail = (f",setpts={slowdown}*PTS,minterpolate=fps={out_fps}"
+                     f":mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1:scd=none")
+
     # --- ffmpeg: native head + reversed tail, splice the synthesized join between ---
     # input 0 = source; input 1 = raw join frames.
     fc = (
@@ -143,7 +154,7 @@ def boomerang(
         f"[0:v]trim=start_frame={last}:end_frame={p0},reverse,setpts=PTS-STARTPTS,"
         f"format=yuv420p,setsar=1[tail];"
         f"[1:v]setpts=PTS-STARTPTS,format=yuv420p,setsar=1[join];"
-        f"[head][join][tail]concat=n=3:v=1[v]"
+        f"[head][join][tail]concat=n=3:v=1{slow_tail}[v]"
     )
     try:
         subprocess.run(
@@ -172,11 +183,14 @@ if __name__ == "__main__":
     ap.add_argument("--loop", action="store_true")
     ap.add_argument("--crf", type=int, default=16)
     ap.add_argument("--preset", default="slow")
+    ap.add_argument("--slowdown", type=float, default=1.0, help=">1 = slower (motion-interpolated)")
+    ap.add_argument("--out_fps", type=int, default=30)
     a = ap.parse_args()
 
     if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
         raise SystemExit("ffmpeg/ffprobe not found on PATH")
 
     result = boomerang(a.input, a.output, window=a.window, loop=a.loop,
+                       slowdown=a.slowdown, out_fps=a.out_fps,
                        crf=a.crf, preset=a.preset)
     print(result)

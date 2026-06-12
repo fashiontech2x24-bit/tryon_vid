@@ -138,7 +138,8 @@ class ControlVideoPipeline:
 
     def generate(self, user_image, output, *, pose_mode="relative",
                  root_motion=1.0, smoothing=0.4, blend_frames=0,
-                 foreshorten=0.0, fps=None):
+                 foreshorten=0.0, fps=None, mirror=False, head_lock=0.0,
+                 frame_indices=None):
         """Retarget the control clip's motion onto ``user_image`` and render
         the skeleton control video.
 
@@ -157,6 +158,16 @@ class ControlVideoPipeline:
             Retargeting controls — see pose_retarget / README.
         fps : float, optional
             Output frame rate. Defaults to the control clip's fps.
+        mirror : bool
+            Flip the control motion left<->right (skeleton-level mirror) —
+            e.g. turn a clockwise torso rotation into a counter-clockwise one.
+        head_lock : float
+            0..1 — pin the head to the user image's orientation while the
+            body follows the control motion.
+        frame_indices : sequence[int], optional
+            Subset/reorder of the control clip's (cached) pose frames to use,
+            e.g. from video_edit.pick_indices — decimation without
+            re-estimating poses.
 
         Returns
         -------
@@ -176,11 +187,14 @@ class ControlVideoPipeline:
         self._log(f"user skeleton: {int(tgt_conf.sum())}/18 keypoints, "
                   f"canvas {W}x{H}")
 
+        poses = self.control_poses
+        if frame_indices is not None:
+            poses = [poses[int(i)] for i in frame_indices]
         frames = pr.retarget_poses(
-            tgt_kpts, tgt_conf, self.control_poses,
+            tgt_kpts, tgt_conf, poses,
             root_motion=root_motion, smoothing=smoothing,
             pose_mode=pose_mode, blend_frames=blend_frames,
-            foreshorten=foreshorten)
+            foreshorten=foreshorten, mirror=mirror, head_lock=head_lock)
 
         out_dir = os.path.dirname(output)
         if out_dir:

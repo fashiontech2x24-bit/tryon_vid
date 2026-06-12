@@ -46,6 +46,7 @@ import numpy as np
 # 14 REye, 15 LEye, 16 REar, 17 LEar
 
 ROOT = 1  # neck
+HEAD = (0, 14, 15, 16, 17)  # nose, eyes, ears — the joints head_lock pins
 
 # child -> parent
 PARENTS = {
@@ -196,12 +197,35 @@ def body_scale(kpts, conf):
     return None
 
 
+def mirror_control_poses(poses):
+    """Mirror a control pose stream left<->right: swap L/R joints and reflect
+    x about the sequence's mean root x. Synthesizes the opposite-direction
+    motion (e.g. a counter-rotation) from a single recorded clip — mirroring
+    must happen at the skeleton level, since flipping generated pixels would
+    flip the garment's asymmetries, prints and face."""
+    xs = [k[ROOT][0] for k, c in poses if c[ROOT] >= 1.0]
+    if not xs:
+        xs = [float(k[c >= 1.0][:, 0].mean()) for k, c in poses if (c >= 1.0).any()]
+    cx = float(np.mean(xs)) if xs else 0.0
+    out = []
+    for kpts, conf in poses:
+        mk, mc = kpts.copy(), conf.copy()
+        for a, b in MIRROR.items():
+            if a < b:
+                mk[[a, b]] = kpts[[b, a]]
+                mc[[a, b]] = conf[[b, a]]
+        mk[:, 0] = 2.0 * cx - mk[:, 0]
+        out.append((mk, mc))
+    return out
+
+
 class Retargeter:
     """Transfers per-bone rotation deltas from a source pose stream onto a
     fixed target skeleton, preserving the target's bone lengths and root."""
 
     def __init__(self, target_kpts, target_conf, root_motion=1.0, smoothing=0.0,
-                 pose_mode="relative", blend_frames=0, foreshorten=0.0):
+                 pose_mode="relative", blend_frames=0, foreshorten=0.0,
+                 head_lock=0.0):
         if target_conf[ROOT] < 1.0:
             raise ValueError("Neck not detected on the VTON image — cannot build target skeleton.")
         self.tgt_root = target_kpts[ROOT].copy()
@@ -244,6 +268,23 @@ class Retargeter:
                 self.bone_valid[c] = True
 
         self.tgt_scale = body_scale(target_kpts, target_conf)
+
+        # head_lock: 0 = head follows the control motion; 1 = head keeps the
+        # reference image's orientation and only translates with the neck
+        # (so the torso can rotate while the face stays toward the camera).
+        self.head_lock = float(np.clip(head_lock, 0.0, 1.0))
+        # rest joint positions reconstructed from the (mirror-repaired) bone
+        # table — the head_lock anchor, consistent even for repaired joints.
+        self.rest_pos = np.zeros((18, 2), dtype=np.float32)
+        self.rest_pos[ROOT] = self.tgt_root
+        for c in ORDER:
+            p = PARENTS[c]
+            if self.bone_valid[c]:
+                a = self.bone_rest[c]
+                self.rest_pos[c] = self.rest_pos[p] + self.bone_len[c] * np.array(
+                    [math.cos(a), math.sin(a)])
+            else:
+                self.rest_pos[c] = self.rest_pos[p]
 
         # per-bone reference angles. relative mode: lazily set to the control
         # stream's first sighting (delta = motion since then). absolute mode:
@@ -343,6 +384,15 @@ class Retargeter:
             fs = 1.0 + w * self.foreshorten * (self.smooth_len_ratio[c] - 1.0)
             out[c] = out[p] + self.bone_len[c] * fs * np.array([math.cos(a), math.sin(a)])
             out_conf[c] = 1.0
+
+        # head lock: pull head joints toward their rest pose translated
+        # rigidly with the neck, instead of following the control rotation.
+        if self.head_lock > 0.0:
+            shift = out[ROOT] - self.tgt_root
+            for c in HEAD:
+                if out_conf[c] >= 1.0:
+                    locked = self.rest_pos[c] + shift
+                    out[c] = (1.0 - self.head_lock) * out[c] + self.head_lock * locked
 
         self._first = False
         self.frame_idx += 1
@@ -444,15 +494,22 @@ def estimate_video_poses(estimator, control_video, skip_frames=0, frame_load_cap
 
 def retarget_poses(target_kpts, target_conf, control_poses, *,
                    root_motion=1.0, smoothing=0.4, pose_mode="relative",
-                   blend_frames=0, foreshorten=0.0):
+                   blend_frames=0, foreshorten=0.0, mirror=False,
+                   head_lock=0.0):
     """Apply a stream of control poses onto a fixed target skeleton.
+
+    ``mirror`` flips the control motion left<->right (skeleton-level) and
+    ``head_lock`` (0..1) pins the head to the target's rest orientation.
 
     Returns a list of (kpts (18,2), conf (18,)) — one retargeted frame per
     control pose, all on the target's bone lengths / framing.
     """
+    if mirror:
+        control_poses = mirror_control_poses(control_poses)
     rt = Retargeter(target_kpts, target_conf, root_motion=root_motion,
                     smoothing=smoothing, pose_mode=pose_mode,
-                    blend_frames=blend_frames, foreshorten=foreshorten)
+                    blend_frames=blend_frames, foreshorten=foreshorten,
+                    head_lock=head_lock)
     return [rt.step(src_kpts, src_conf) for src_kpts, src_conf in control_poses]
 
 

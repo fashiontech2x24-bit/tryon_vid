@@ -3,31 +3,35 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Wan VACE — Video Try-On</title>
+<title>Wan VACE — Video Try-On Studio</title>
 <style>
   :root { --bg:#0e1116; --card:#171b22; --line:#262c36; --fg:#e6e9ef; --mut:#8b94a3; --acc:#4f8cff; --ok:#6fd28a; --err:#ff6b6b; }
   * { box-sizing: border-box; }
   body { margin:0; font:15px/1.5 system-ui,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--fg); }
-  .wrap { max-width: 920px; margin: 0 auto; padding: 28px 18px 60px; }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 28px 18px 60px; }
   h1 { font-size: 22px; margin: 0 0 4px; }
-  .sub { color: var(--mut); margin: 0 0 22px; font-size: 13px; }
+  .sub { color: var(--mut); margin: 0 0 18px; font-size: 13px; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; margin-bottom:18px; }
   label { display:block; font-size:12px; color:var(--mut); margin:14px 0 6px; text-transform:uppercase; letter-spacing:.04em; }
   label:first-child { margin-top:0; }
-  input[type=file], textarea, input[type=number], select {
+  input[type=file], textarea, input[type=number], input[type=text], select {
     width:100%; background:#0f131a; border:1px solid var(--line); color:var(--fg);
     border-radius:8px; padding:9px 10px; font:inherit;
   }
+  input[type=checkbox] { width:auto; accent-color:var(--acc); }
   textarea { resize:vertical; min-height:64px; }
   .drop { border:1.5px dashed var(--line); border-radius:10px; padding:14px; text-align:center; color:var(--mut); cursor:pointer; }
   .drop.has { border-color:var(--acc); color:var(--fg); }
   img.prev, video { width:100%; border-radius:8px; margin-top:10px; background:#000; max-height:360px; object-fit:contain; }
-  button { background:var(--acc); color:#fff; border:0; border-radius:9px; padding:12px 18px; font:inherit; font-weight:600; cursor:pointer; }
+  button { background:var(--acc); color:#fff; border:0; border-radius:9px; padding:11px 16px; font:inherit; font-weight:600; cursor:pointer; }
   button:disabled { opacity:.5; cursor:not-allowed; }
+  button.ghost { background:transparent; border:1px solid var(--line); color:var(--fg); }
+  button.sm { padding:6px 10px; font-size:13px; }
   .row { display:flex; gap:14px; align-items:center; margin-top:18px; flex-wrap:wrap; }
   details { margin-top:16px; } summary { cursor:pointer; color:var(--mut); font-size:13px; }
   .adv { display:grid; grid-template-columns: repeat(4,1fr); gap:12px; margin-top:12px; }
-  @media (max-width:760px){ .adv { grid-template-columns: repeat(2,1fr); } }
+  .adv6 { display:grid; grid-template-columns: repeat(6,1fr); gap:12px; margin-top:12px; }
+  @media (max-width:760px){ .adv,.adv6 { grid-template-columns: repeat(2,1fr); } }
   .bar { height:10px; background:#0f131a; border:1px solid var(--line); border-radius:6px; overflow:hidden; }
   .bar > i { display:block; height:100%; width:0; background:var(--acc); transition:width .3s; }
   .stage { font-size:13px; color:var(--mut); margin-top:8px; }
@@ -37,14 +41,32 @@
   .thumbs { display:flex; gap:14px; flex-wrap:wrap; }
   .thumbs > div { flex:1 1 220px; }
   .thumbs label { margin-top:0; }
+  .tabs { display:flex; gap:8px; margin-bottom:18px; }
+  .tabs button { background:transparent; border:1px solid var(--line); color:var(--mut); }
+  .tabs button.on { background:var(--acc); border-color:var(--acc); color:#fff; }
+  .tab { display:none; } .tab.on { display:block; }
+  table.segs { width:100%; border-collapse:collapse; margin-top:8px; font-size:14px; }
+  table.segs th { font-size:11px; color:var(--mut); text-transform:uppercase; letter-spacing:.04em; text-align:left; padding:4px 8px; }
+  table.segs td { padding:4px 8px; border-top:1px solid var(--line); }
+  table.segs td input[type=number] { width:70px; }
+  .hint { font-size:12.5px; color:var(--mut); margin-top:6px; }
+  .big { font-size:17px; font-weight:600; color:var(--fg); }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>Wan 2.1 VACE — Video Try-On</h1>
-  <p class="sub">Upload a reference image, pick a motion preset → control video, generation, and seamless boomerang run automatically.
+  <h1>Wan 2.1 VACE — Video Try-On Studio</h1>
+  <p class="sub">Build control presets, generate multi-segment videos, stitch them seamlessly.
     <span id="health" class="pill">checking…</span></p>
 
+  <div class="tabs">
+    <button id="tabGen" class="on">Quick Generate</button>
+    <button id="tabCtl">Control Studio</button>
+    <button id="tabCmp">Compose</button>
+  </div>
+
+  <!-- ============================ QUICK GENERATE ============================ -->
+  <div class="tab on" id="paneGen">
   <div class="card">
     <label>Reference image</label>
     <div class="drop" id="imgDrop">Click or drop an image</div>
@@ -73,6 +95,7 @@
     <details>
       <summary>Boomerang (postprocess) options</summary>
       <div class="adv">
+        <div><label>Slowdown (×)</label><input id="slowdown" type="number" step="0.25" placeholder="1.5" min="1" /></div>
         <div><label>Window</label><input id="window" type="number" placeholder="3" min="1" /></div>
         <div><label>CRF</label><input id="crf" type="number" placeholder="16" min="0" max="51" /></div>
         <div><label>Seamless loop</label><select id="loop"><option value="true">yes</option><option value="false">no</option></select></div>
@@ -98,45 +121,199 @@
       </div>
     </details>
   </div>
+  </div>
+
+  <!-- ============================ CONTROL STUDIO ============================ -->
+  <div class="tab" id="paneCtl">
+  <div class="card">
+    <label>Source recording (e.g. 60fps phone clip)</label>
+    <div class="row" style="margin-top:0">
+      <select id="srcSel" style="flex:1"></select>
+      <button class="ghost" id="srcUpBtn">Upload new…</button>
+      <input id="srcUp" type="file" accept="video/*" hidden />
+    </div>
+    <div class="hint" id="srcInfo"></div>
+    <video id="srcVid" controls muted hidden></video>
+
+    <label>Trim (seconds)</label>
+    <div class="adv">
+      <div><label>Start</label><input id="trimStart" type="number" step="0.1" min="0" placeholder="0" /></div>
+      <div><label>End (blank = clip end)</label><input id="trimEnd" type="number" step="0.1" min="0" placeholder="" /></div>
+      <div><label>&nbsp;</label><button class="ghost sm" id="setStart">⏱ start = playhead</button></div>
+      <div><label>&nbsp;</label><button class="ghost sm" id="setEnd">⏱ end = playhead</button></div>
+    </div>
+
+    <label>Decimate — frames removed uniformly across the whole trim</label>
+    <div class="adv">
+      <div><label>Output duration (s)</label><input id="decDur" type="number" step="0.1" min="0.4" placeholder="trim length" /></div>
+      <div><label>Output FPS</label><input id="decFps" type="number" step="1" min="4" value="12" /></div>
+      <div><label>&nbsp;</label><div class="big" id="decFrames">—</div></div>
+      <div><label>&nbsp;</label><button class="sm" id="decPrev">Preview decimated</button></div>
+    </div>
+    <div class="hint">Frame count snaps to Wan's 4k+1 grid, max 29. Lower duration ⇒ more frames removed (motion plays faster).</div>
+    <video id="decVid" controls loop muted hidden></video>
+
+    <label>Motion transfer (pose retarget) — stored with the preset</label>
+    <div class="adv6">
+      <div><label>Pose mode</label><select id="rtMode"><option>absolute</option><option>relative</option></select></div>
+      <div><label>Root motion</label><input id="rtRoot" type="number" step="0.1" value="1.0" /></div>
+      <div><label>Smoothing</label><input id="rtSmooth" type="number" step="0.05" value="0.4" /></div>
+      <div><label>Foreshorten</label><input id="rtFore" type="number" step="0.1" value="1.0" /></div>
+      <div><label>Blend frames</label><input id="rtBlend" type="number" step="1" value="8" /></div>
+      <div><label>Head lock (0–1)</label><input id="rtHead" type="number" step="0.1" min="0" max="1" value="0" /></div>
+    </div>
+    <div class="row">
+      <label style="margin:0"><input id="rtMirror" type="checkbox" /> mirror (preview only — mirroring is chosen per segment in Compose)</label>
+    </div>
+
+    <label>Skeleton preview against a reference image</label>
+    <div class="drop" id="ctlImgDrop">Click or drop a VTON result image</div>
+    <input id="ctlImgFile" type="file" accept="image/*" hidden />
+    <div class="row">
+      <button id="posePrev">Skeleton preview</button>
+      <span class="hint">first preview per source estimates its poses once (slow on CPU, cached after)</span>
+    </div>
+    <span id="ctlStage" class="stage" hidden></span>
+    <div class="thumbs" style="margin-top:12px">
+      <div><img id="ctlImgPrev" class="prev" hidden /></div>
+      <div><video id="poseVid" controls loop muted hidden></video></div>
+    </div>
+
+    <label>Save as motion preset</label>
+    <div class="row" style="margin-top:0">
+      <input id="presetName" type="text" placeholder="e.g. step-back" style="flex:1" />
+      <button id="savePreset">Save preset</button>
+    </div>
+    <div class="hint">Writes the decimated clip + this retarget config into <code>assets/motion_presets/</code>; it then appears in Compose.</div>
+  </div>
+  </div>
+
+  <!-- ============================== COMPOSE ============================== -->
+  <div class="tab" id="paneCmp">
+  <div class="card">
+    <label>Reference image (VTON result)</label>
+    <div class="drop" id="cmpImgDrop">Click or drop an image</div>
+    <input id="cmpImgFile" type="file" accept="image/*" hidden />
+    <img id="cmpImgPrev" class="prev" hidden />
+
+    <label>Segments — each unique preset+mirror is generated once, ops apply at stitch time</label>
+    <table class="segs" id="segTable">
+      <thead><tr><th>#</th><th>Preset</th><th>Mirror</th><th>Reverse</th><th>Boomerang</th><th>Window</th><th>Speed ×</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="row"><button class="ghost sm" id="addSeg">+ add segment</button></div>
+
+    <label>Seams — junction between consecutive segments</label>
+    <table class="segs" id="seamTable">
+      <thead><tr><th>Junction</th><th>Pause / slow-mo settle (s)</th><th>Morph window (frames, when pause = 0)</th></tr></thead>
+      <tbody></tbody>
+    </table>
+
+    <label>Stitch output</label>
+    <div class="adv">
+      <div><label>Out FPS</label><input id="stFps" type="number" placeholder="12" /></div>
+      <div><label>CRF</label><input id="stCrf" type="number" placeholder="16" /></div>
+      <div><label>Slowdown (×)</label><input id="stSlow" type="number" step="0.25" placeholder="1.0" min="1" /></div>
+    </div>
+
+    <details>
+      <summary>Generation (Wan VACE) options — shared by all segments, same seed</summary>
+      <div style="margin-top:12px"><label>Positive prompt</label><textarea id="cmpPositive"></textarea></div>
+      <div class="adv">
+        <div><label>Width</label><input id="cmpWidth" type="number" placeholder="768" /></div>
+        <div><label>Height</label><input id="cmpHeight" type="number" placeholder="1024" /></div>
+        <div><label>Steps</label><input id="cmpSteps" type="number" placeholder="4" /></div>
+        <div><label>CFG</label><input id="cmpCfg" type="number" step="0.1" placeholder="1" /></div>
+        <div><label>LoRA strength</label><input id="cmpLora" type="number" step="0.05" placeholder="0.3" /></div>
+        <div><label>Shift</label><input id="cmpShift" type="number" step="0.5" placeholder="4" /></div>
+        <div><label>Seed (blank=random)</label><input id="cmpSeed" type="number" placeholder="random" /></div>
+      </div>
+    </details>
+
+    <div class="row">
+      <button id="cmpGo">Generate &amp; stitch</button>
+      <button class="ghost" id="restitch" hidden>Re-stitch only (no regeneration)</button>
+      <span id="cmpStageWrap" class="stage" hidden></span>
+    </div>
+    <div class="bar" id="cmpBarWrap" hidden style="margin-top:12px"><i id="cmpBar"></i></div>
+  </div>
+
+  <div class="card" id="cmpResultCard" hidden>
+    <label>Final stitched video</label>
+    <video id="cmpOutVid" controls autoplay loop muted></video>
+    <div class="row"><a id="cmpDl" class="dl" href="#" download>⬇ Download mp4</a></div>
+    <details open>
+      <summary>Segments (controls + raw generations)</summary>
+      <div class="thumbs" id="cmpInter" style="margin-top:12px"></div>
+    </details>
+  </div>
+  </div>
 </div>
 
 <script>
 const DEFAULT_POSITIVE = "High-fidelity, cinematic fashion video of the model from the reference image. The camera remains completely static and fixed in place.The fabric of the garment drapes naturally, displaying realistic physical movement, soft folds, and consistent texture as the torso rotates. The soft, diffused key lighting highlights the fabric weave, preserving the garment’s logos and structural integrity.static locked-off camera, fixed tripod shot, no camera movement, no panning, no tilting, no zooming, no dolly, no trucking, no handheld motion, no camera shake, subject motion only";
 const $ = id => document.getElementById(id);
 $("positive").value = DEFAULT_POSITIVE;
+$("cmpPositive").value = DEFAULT_POSITIVE;
 
-const imgDrop = $("imgDrop"), imgFile = $("imgFile");
-imgDrop.onclick = () => imgFile.click();
-imgDrop.addEventListener("dragover", e => { e.preventDefault(); imgDrop.classList.add("has"); });
-imgDrop.addEventListener("dragleave", () => imgDrop.classList.remove("has"));
-imgDrop.addEventListener("drop", e => { e.preventDefault(); imgFile.files = e.dataTransfer.files; imgFile.onchange(); });
-imgFile.onchange = () => {
-  const f = imgFile.files[0]; if (!f) return;
-  imgDrop.classList.add("has"); imgDrop.textContent = f.name;
-  $("imgPrev").src = URL.createObjectURL(f); $("imgPrev").hidden = false;
-};
+/* ------------------------------- tabs --------------------------------- */
+const TABS = { tabGen: "paneGen", tabCtl: "paneCtl", tabCmp: "paneCmp" };
+for (const [b, p] of Object.entries(TABS)) {
+  $(b).onclick = () => {
+    for (const [b2, p2] of Object.entries(TABS)) {
+      $(b2).classList.toggle("on", b2 === b);
+      $(p2).classList.toggle("on", b2 === b);
+    }
+  };
+}
 
+/* --------------------------- shared helpers --------------------------- */
+function wireDrop(dropId, fileId, prevId) {
+  const drop = $(dropId), file = $(fileId);
+  drop.onclick = () => file.click();
+  drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("has"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("has"));
+  drop.addEventListener("drop", e => { e.preventDefault(); file.files = e.dataTransfer.files; file.onchange(); });
+  file.onchange = () => {
+    const f = file.files[0]; if (!f) return;
+    drop.classList.add("has"); drop.textContent = f.name;
+    if (prevId) { $(prevId).src = URL.createObjectURL(f); $(prevId).hidden = false; }
+  };
+}
+wireDrop("imgDrop", "imgFile", "imgPrev");
+wireDrop("ctlImgDrop", "ctlImgFile", "ctlImgPrev");
+wireDrop("cmpImgDrop", "cmpImgFile", "cmpImgPrev");
+
+let PRESETS = [];
 async function refresh() {
   try {
     const j = await (await fetch("/api/health")).json();
     const el = $("health");
     el.textContent = (j.comfy_up ? "ComfyUI ready" : "ComfyUI offline") + " · pose:" + j.device;
     el.style.color = j.comfy_up ? "var(--ok)" : "var(--err)";
-    if (j.presets && $("preset").options.length === 0)
-      $("preset").innerHTML = j.presets.map(p => `<option>${p}</option>`).join("")
+    if (j.presets && JSON.stringify(j.presets) !== JSON.stringify(PRESETS)) {
+      PRESETS = j.presets;
+      $("preset").innerHTML = PRESETS.map(p => `<option>${p}</option>`).join("")
         || `<option disabled>no presets in assets/motion_presets/</option>`;
+      document.querySelectorAll("select.segPreset").forEach(sel => {
+        const cur = sel.value;
+        sel.innerHTML = PRESETS.map(p => `<option>${p}</option>`).join("");
+        if (PRESETS.includes(cur)) sel.value = cur;
+      });
+    }
   } catch { $("health").textContent = "server unreachable"; }
 }
 refresh(); setInterval(refresh, 8000);
 
+/* ========================== QUICK GENERATE ============================ */
 const FIELDS = ["preset","positive","width","height","length","fps","steps","cfg",
-  "lora_strength","shift","seed","window","crf","loop"];
+  "lora_strength","shift","seed","window","crf","loop","slowdown"];
 
 $("go").onclick = async () => {
-  if (!imgFile.files[0]) { alert("Pick a reference image."); return; }
+  if (!$("imgFile").files[0]) { alert("Pick a reference image."); return; }
   if (!$("preset").value) { alert("No motion preset available."); return; }
   const fd = new FormData();
-  fd.append("image", imgFile.files[0]);
+  fd.append("image", $("imgFile").files[0]);
   FIELDS.forEach(k => fd.append(k, $(k).value));
 
   $("go").disabled = true; $("resultCard").hidden = true;
@@ -174,6 +351,266 @@ async function poll(job) {
     setTimeout(() => poll(job), 1200);
   } catch { setTimeout(() => poll(job), 2000); }
 }
+
+/* ========================== CONTROL STUDIO ============================ */
+const SOURCES = {};   // source_id -> probe info
+
+function ctlStage(t, cls) { const w = $("ctlStage"); w.hidden = !t; w.textContent = t || ""; w.className = "stage" + (cls ? " " + cls : ""); }
+
+async function loadSources(selectId) {
+  const j = await (await fetch("/api/control/sources")).json();
+  const sel = $("srcSel"), cur = selectId || sel.value;
+  sel.innerHTML = j.sources.map(s =>
+    `<option value="${s.source_id}">${s.source_id} — ${s.frames}f @ ${s.fps.toFixed(0)}fps, ${s.duration.toFixed(1)}s</option>`).join("")
+    || `<option disabled value="">upload a source recording…</option>`;
+  j.sources.forEach(s => SOURCES[s.source_id] = s);
+  if (cur && SOURCES[cur]) sel.value = cur;
+  sel.onchange();
+}
+$("srcSel").onchange = () => {
+  const id = $("srcSel").value, s = SOURCES[id];
+  $("srcVid").hidden = !id;
+  if (!id) return;
+  $("srcVid").src = "/api/control/source/" + id;
+  $("srcInfo").textContent = `${s.width}×${s.height} · ${s.frames} frames · ${s.fps.toFixed(2)} fps · ${s.duration.toFixed(2)} s`;
+  updFrames();
+};
+loadSources();
+
+$("srcUpBtn").onclick = () => $("srcUp").click();
+$("srcUp").onchange = async () => {
+  const f = $("srcUp").files[0]; if (!f) return;
+  ctlStage("Uploading source…");
+  const fd = new FormData(); fd.append("video", f);
+  const r = await fetch("/api/control/upload", { method: "POST", body: fd });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) return ctlStage("Upload failed: " + (d.detail || r.statusText), "err");
+  ctlStage("");
+  await loadSources(d.source_id);
+};
+
+$("setStart").onclick = () => { $("trimStart").value = $("srcVid").currentTime.toFixed(2); updFrames(); };
+$("setEnd").onclick = () => { $("trimEnd").value = $("srcVid").currentTime.toFixed(2); updFrames(); };
+
+function snap41(n) { return Math.max(5, Math.floor((Math.min(n, 29) - 1) / 4) * 4 + 1); }
+function updFrames() {
+  const s = SOURCES[$("srcSel").value]; if (!s) return $("decFrames").textContent = "—";
+  const t0 = parseFloat($("trimStart").value) || 0;
+  const t1 = parseFloat($("trimEnd").value) || s.duration;
+  const trim = Math.max(0.1, t1 - t0);
+  const dur = parseFloat($("decDur").value) || trim;
+  const fps = parseFloat($("decFps").value) || 12;
+  const avail = Math.max(2, Math.round(trim * s.fps));
+  const n = snap41(Math.min(Math.round(dur * fps), avail));
+  $("decFrames").textContent = `→ ${n} frames`;
+}
+["trimStart","trimEnd","decDur","decFps"].forEach(id => $(id).oninput = updFrames);
+
+function decForm() {
+  const fd = new FormData();
+  fd.append("source_id", $("srcSel").value);
+  fd.append("start", $("trimStart").value);
+  fd.append("end", $("trimEnd").value);
+  fd.append("duration", $("decDur").value);
+  fd.append("fps", $("decFps").value);
+  return fd;
+}
+function rtAppend(fd) {
+  fd.append("pose_mode", $("rtMode").value);
+  fd.append("root_motion", $("rtRoot").value);
+  fd.append("smoothing", $("rtSmooth").value);
+  fd.append("foreshorten", $("rtFore").value);
+  fd.append("blend_frames", $("rtBlend").value);
+  fd.append("head_lock", $("rtHead").value);
+}
+
+$("decPrev").onclick = async () => {
+  if (!$("srcSel").value) return alert("Pick a source.");
+  ctlStage("Decimating…");
+  const r = await fetch("/api/control/preview", { method: "POST", body: decForm() });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) return ctlStage("Failed: " + (d.detail || r.statusText), "err");
+  ctlStage(`Decimated: ${d.n_frames} frames @ ${d.fps} fps (${d.duration.toFixed(2)} s)`, "ok");
+  $("decVid").src = d.url; $("decVid").hidden = false;
+};
+
+$("posePrev").onclick = async () => {
+  if (!$("srcSel").value) return alert("Pick a source.");
+  if (!$("ctlImgFile").files[0]) return alert("Pick a reference image for the skeleton preview.");
+  ctlStage("Retargeting… (first run per source estimates poses — can take a while)");
+  $("posePrev").disabled = true;
+  try {
+    const fd = decForm();
+    fd.append("image", $("ctlImgFile").files[0]);
+    fd.append("mirror", $("rtMirror").checked);
+    rtAppend(fd);
+    const r = await fetch("/api/control/pose_preview", { method: "POST", body: fd });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) return ctlStage("Failed: " + (d.detail || r.statusText), "err");
+    ctlStage(`Skeleton: ${d.n_frames} frames @ ${d.fps} fps`, "ok");
+    $("poseVid").src = d.url; $("poseVid").hidden = false;
+  } finally { $("posePrev").disabled = false; }
+};
+
+$("savePreset").onclick = async () => {
+  if (!$("srcSel").value) return alert("Pick a source.");
+  if (!$("presetName").value.trim()) return alert("Name the preset.");
+  ctlStage("Saving preset…");
+  const fd = decForm();
+  fd.append("name", $("presetName").value.trim());
+  rtAppend(fd);
+  const r = await fetch("/api/control/save_preset", { method: "POST", body: fd });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) return ctlStage("Failed: " + (d.detail || r.statusText), "err");
+  ctlStage(`Saved preset ${d.preset} (${d.n_frames} frames @ ${d.fps} fps)`, "ok");
+  refresh();
+};
+
+/* ============================== COMPOSE ================================ */
+// default choreography: step-back reversed → rotation boomerang → mirrored rotation boomerang
+const DEFAULT_SEGS = [
+  { mirror: false, reverse: true,  boomerang: false, window: 3, speed: 1.0 },
+  { mirror: false, reverse: false, boomerang: true,  window: 3, speed: 1.0 },
+  { mirror: true,  reverse: false, boomerang: true,  window: 3, speed: 1.0 },
+];
+
+function addSegRow(cfg = {}) {
+  const tb = $("segTable").querySelector("tbody");
+  const tr = document.createElement("tr");
+  tr.innerHTML = `
+    <td class="segNo"></td>
+    <td><select class="segPreset">${PRESETS.map(p => `<option>${p}</option>`).join("")}</select></td>
+    <td><input type="checkbox" class="segMirror" ${cfg.mirror ? "checked" : ""}></td>
+    <td><input type="checkbox" class="segReverse" ${cfg.reverse ? "checked" : ""}></td>
+    <td><input type="checkbox" class="segBoom" ${cfg.boomerang ? "checked" : ""}></td>
+    <td><input type="number" class="segWin" min="1" value="${cfg.window ?? 3}"></td>
+    <td><input type="number" class="segSpeed" step="0.1" min="0.2" value="${cfg.speed ?? 1.0}"></td>
+    <td><button class="ghost sm segDel">×</button></td>`;
+  if (cfg.preset) tr.querySelector(".segPreset").value = cfg.preset;
+  tr.querySelector(".segDel").onclick = () => { tr.remove(); renumber(); };
+  tb.appendChild(tr);
+  renumber();
+}
+$("addSeg").onclick = () => addSegRow();
+
+function renumber() {
+  const rows = [...$("segTable").querySelectorAll("tbody tr")];
+  rows.forEach((tr, i) => tr.querySelector(".segNo").textContent = i + 1);
+  const st = $("seamTable").querySelector("tbody");
+  const old = [...st.querySelectorAll("tr")].map(tr => ({
+    pause: tr.querySelector(".seamPause").value, win: tr.querySelector(".seamWin").value }));
+  st.innerHTML = "";
+  for (let i = 0; i < rows.length - 1; i++) {
+    const tr = document.createElement("tr");
+    const prev = old[i] || { pause: i === 0 ? "0.4" : "0", win: "3" };
+    tr.innerHTML = `<td>seg ${i + 1} → seg ${i + 2}</td>
+      <td><input type="number" class="seamPause" step="0.1" min="0" value="${prev.pause}"></td>
+      <td><input type="number" class="seamWin" min="1" value="${prev.win}"></td>`;
+    st.appendChild(tr);
+  }
+}
+
+// build the default rows once presets are known
+const segInit = setInterval(() => {
+  if (!PRESETS.length) return;
+  clearInterval(segInit);
+  DEFAULT_SEGS.forEach(c => addSegRow(c));
+}, 300);
+
+function collectRecipe() {
+  const segs = [...$("segTable").querySelectorAll("tbody tr")].map(tr => ({
+    preset: tr.querySelector(".segPreset").value,
+    mirror: tr.querySelector(".segMirror").checked,
+    reverse: tr.querySelector(".segReverse").checked,
+    boomerang: tr.querySelector(".segBoom").checked,
+    boomerang_window: parseInt(tr.querySelector(".segWin").value) || 3,
+    speed: parseFloat(tr.querySelector(".segSpeed").value) || 1.0,
+  }));
+  const seams = [...$("seamTable").querySelectorAll("tbody tr")].map(tr => ({
+    pause: parseFloat(tr.querySelector(".seamPause").value) || 0,
+    window: parseInt(tr.querySelector(".seamWin").value) || 3,
+  }));
+  const stitch = {};
+  if ($("stFps").value) stitch.out_fps = parseFloat($("stFps").value);
+  if ($("stCrf").value) stitch.crf = parseInt($("stCrf").value);
+  if ($("stSlow").value) stitch.slowdown = parseFloat($("stSlow").value);
+  const gen = { positive: $("cmpPositive").value };
+  const map = { width:"cmpWidth", height:"cmpHeight", steps:"cmpSteps", cfg:"cmpCfg",
+                lora_strength:"cmpLora", shift:"cmpShift", seed:"cmpSeed" };
+  for (const [k, id] of Object.entries(map)) if ($(id).value) gen[k] = $(id).value;
+  return { segments: segs, seams, stitch, gen };
+}
+
+function cmpStage(t, cls) { const w = $("cmpStageWrap"); w.hidden = false; w.textContent = t; w.className = "stage" + (cls ? " " + cls : ""); }
+function cmpFail(m) { cmpStage(m, "err"); $("cmpGo").disabled = false; $("cmpBarWrap").hidden = true; }
+
+let CMP_JOB = null;
+
+$("cmpGo").onclick = async () => {
+  if (!$("cmpImgFile").files[0]) { alert("Pick a reference image."); return; }
+  const recipe = collectRecipe();
+  if (!recipe.segments.length) { alert("Add at least one segment."); return; }
+  const fd = new FormData();
+  fd.append("image", $("cmpImgFile").files[0]);
+  fd.append("recipe", JSON.stringify(recipe));
+
+  $("cmpGo").disabled = true; $("cmpResultCard").hidden = true; $("restitch").hidden = true;
+  $("cmpBarWrap").hidden = false; $("cmpBar").style.width = "0%";
+  cmpStage("Uploading…");
+  let job;
+  try {
+    const r = await fetch("/api/compose", { method: "POST", body: fd });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || r.statusText);
+    job = d.job_id;
+  } catch (e) { return cmpFail("Submit failed: " + e.message); }
+  CMP_JOB = job;
+  pollCompose(job);
+};
+
+async function pollCompose(job) {
+  try {
+    const j = await (await fetch("/api/status/" + job)).json();
+    $("cmpBar").style.width = Math.round((j.progress || 0) * 100) + "%";
+    if (j.status === "error") return cmpFail("Error: " + (j.error || "unknown"));
+    if (j.status === "done") {
+      cmpStage("Done — " + (j.n_generations || "?") + " generation(s), " +
+               ((j.stitch_info || {}).n_frames || "?") + " stitched frames.", "ok");
+      $("cmpGo").disabled = false; $("restitch").hidden = false;
+      $("cmpOutVid").src = j.output_url; $("cmpDl").href = j.output_url;
+      const inter = $("cmpInter"); inter.innerHTML = "";
+      for (let k = 0; ; k++) {
+        const cu = j["control_" + k + "_url"], gu = j["gen_" + k + "_url"];
+        if (!cu && !gu) break;
+        inter.insertAdjacentHTML("beforeend",
+          `<div><label>control ${k}</label><video src="${cu}" controls loop muted></video></div>
+           <div><label>generated ${k}</label><video src="${gu}" controls loop muted></video></div>`);
+      }
+      $("cmpResultCard").hidden = false;
+      return;
+    }
+    cmpStage(j.stage || j.status || "working…");
+    setTimeout(() => pollCompose(job), 1200);
+  } catch { setTimeout(() => pollCompose(job), 2000); }
+}
+
+$("restitch").onclick = async () => {
+  if (!CMP_JOB) return;
+  const recipe = collectRecipe();
+  cmpStage("Re-stitching…");
+  $("restitch").disabled = true;
+  try {
+    const r = await fetch("/api/restitch/" + CMP_JOB, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ segments: recipe.segments, seams: recipe.seams, stitch: recipe.stitch }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) return cmpStage("Re-stitch failed: " + (d.detail || r.statusText), "err");
+    cmpStage("Re-stitched — " + d.stitch_info.n_frames + " frames.", "ok");
+    $("cmpOutVid").src = d.output_url; $("cmpDl").href = d.output_url;
+    $("cmpResultCard").hidden = false;
+  } finally { $("restitch").disabled = false; }
+};
 </script>
 </body>
 </html>

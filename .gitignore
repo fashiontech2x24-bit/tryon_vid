@@ -25,5 +25,10 @@ runs/
 models/
 
 # but DO commit the bundled motion presets despite the *.mp4 rule above
+# (+ their retarget-config sidecars from the control workbench)
 !assets/motion_presets/
 !assets/motion_presets/*.mp4
+!assets/motion_presets/*.json
+
+# uploaded control-source recordings (workbench input; large, per-instance)
+assets/control_sources/
