@@ -11,17 +11,31 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="$REPO_DIR/logs"; mkdir -p "$LOG_DIR"
 APP_PORT="${APP_PORT:-8000}"
 
-# inherit COMFY_URL + python from the currently running app, if any
+# inherit COMFY_URL + python from the currently running app — but only if the
+# pid file actually points at our uvicorn process (PIDs get recycled; a stale
+# pid file must not make us inherit from some unrelated process).
 if [[ -f "$LOG_DIR/app.pid" ]]; then
   old_pid="$(cat "$LOG_DIR/app.pid")"
-  if [[ -z "${COMFY_URL:-}" && -r "/proc/$old_pid/environ" ]]; then
-    COMFY_URL="$(tr '\0' '\n' < "/proc/$old_pid/environ" | sed -n 's/^COMFY_URL=//p')"
-  fi
-  if [[ -z "${PY:-}" && -r "/proc/$old_pid/cmdline" ]]; then
-    PY="$(tr '\0' '\n' < "/proc/$old_pid/cmdline" | head -1)"
+  if [[ -r "/proc/$old_pid/cmdline" ]] && \
+     tr '\0' ' ' < "/proc/$old_pid/cmdline" | grep -q 'uvicorn app:app'; then
+    if [[ -z "${COMFY_URL:-}" && -r "/proc/$old_pid/environ" ]]; then
+      COMFY_URL="$(tr '\0' '\n' < "/proc/$old_pid/environ" | sed -n 's/^COMFY_URL=//p')"
+    fi
+    if [[ -z "${PY:-}" ]]; then
+      PY="$(tr '\0' '\n' < "/proc/$old_pid/cmdline" | head -1)"
+    fi
   fi
 fi
 COMFY_URL="${COMFY_URL:-http://127.0.0.1:8188}"
+
+# PY must be a working python; otherwise fall back to common locations
+if [[ -z "${PY:-}" ]] || ! "$PY" -c 'import sys' >/dev/null 2>&1; then
+  for cand in /venv/main/bin/python3 /venv/main/bin/python python3 python; do
+    if command -v "$cand" >/dev/null 2>&1 && "$cand" -c 'import uvicorn' >/dev/null 2>&1; then
+      PY="$cand"; break
+    fi
+  done
+fi
 PY="${PY:-python3}"
 
 [[ -f "$LOG_DIR/app.pid" ]] && kill "$(cat "$LOG_DIR/app.pid")" 2>/dev/null || true
