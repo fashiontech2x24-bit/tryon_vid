@@ -236,7 +236,21 @@ fi
 # 4. Demo server deps
 # ----------------------------------------------------------------------------
 say "Installing demo server + pipeline requirements"
-"$PY" -m pip install -q -r "$REPO_DIR/server/requirements.txt"
+# On a GPU box use onnxruntime-gpu (DWPose ~10-20x faster). The CPU and GPU
+# onnxruntime distributions ship the same module and overwrite each other, so
+# install exactly one: filter the CPU pin out of requirements when GPU-bound.
+if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
+  say "NVIDIA GPU detected — using onnxruntime-gpu for pose estimation"
+  REQ_NOORT="$(mktemp)"
+  grep -viE '^[[:space:]]*onnxruntime' "$REPO_DIR/server/requirements.txt" > "$REQ_NOORT"
+  "$PY" -m pip install -q -r "$REQ_NOORT"; rm -f "$REQ_NOORT"
+  "$PY" -m pip uninstall -q -y onnxruntime 2>/dev/null || true
+  "$PY" -m pip install -q "onnxruntime-gpu>=1.18" \
+    || { echo "   (onnxruntime-gpu install failed; pose stays on CPU)"; \
+         "$PY" -m pip install -q "onnxruntime>=1.17"; }
+else
+  "$PY" -m pip install -q -r "$REPO_DIR/server/requirements.txt"
+fi
 
 # boomerang postprocess needs ffmpeg/ffprobe on PATH
 if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
@@ -309,6 +323,7 @@ sleep 1
 say "Starting demo app on 0.0.0.0:${APP_PORT} (log: $LOG_DIR/app.log)"
 ( cd "$REPO_DIR/server" && \
   COMFY_URL="http://127.0.0.1:${CHOSEN_PORT}" \
+  POSE_DEVICE="${POSE_DEVICE:-auto}" \
   nohup "$PY" -m uvicorn app:app --host 0.0.0.0 --port "$APP_PORT" \
     >"$LOG_DIR/app.log" 2>&1 & echo $! >"$LOG_DIR/app.pid" )
 sleep 3

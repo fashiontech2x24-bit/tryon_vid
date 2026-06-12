@@ -72,7 +72,15 @@ bash setup.sh
 
 Drop (or symlink) a motion clip into `assets/motion_presets/` and it appears in
 the UI dropdown on next load. Bundled: `shot3.mp4`, `shot1.mp4`, `full-pivot.mp4`.
-Pose estimation runs on CPU by default (`POSE_DEVICE=cuda` for onnxruntime-gpu).
+Pose estimation device is `POSE_DEVICE=auto`: setup.sh installs
+`onnxruntime-gpu` on GPU boxes and the app picks CUDA automatically (CPU
+fallback otherwise). Force with `POSE_DEVICE=cpu|cuda`.
+
+### Restarting after a code update
+
+```bash
+git pull && bash restart_app.sh   # restarts only the FastAPI app; ComfyUI keeps running
+```
 
 Then open the demo via the Vast.ai **mapped address for port 8000** (expose
 port `8000` in the instance config). Stop everything with `bash stop.sh`.

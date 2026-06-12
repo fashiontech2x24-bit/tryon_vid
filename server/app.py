@@ -49,7 +49,29 @@ RUNS_DIR = Path(os.environ.get("RUNS_DIR", ROOT / "runs")).resolve()
 PREVIEWS_DIR = RUNS_DIR / "_previews"
 MODEL_DIR = os.environ.get("DWPOSE_MODEL_DIR", str(ROOT / "models" / "dwpose"))
 CACHE_DIR = os.environ.get("POSE_CACHE_DIR", str(ROOT / ".pose_cache"))
-POSE_DEVICE = os.environ.get("POSE_DEVICE", "cpu")
+
+
+def _resolve_pose_device(requested: str) -> str:
+    """'auto' (the default) picks cuda whenever onnxruntime ships the CUDA
+    provider (setup.sh installs onnxruntime-gpu on GPU boxes); otherwise cpu.
+    An explicit cpu/mps/cuda request is honored, with a cpu fallback + warning
+    when cuda isn't actually available."""
+    req = (requested or "auto").strip().lower()
+    if req in ("cpu", "mps"):
+        return req
+    try:
+        import onnxruntime as ort
+        if "CUDAExecutionProvider" in ort.get_available_providers():
+            return "cuda"
+    except Exception:
+        pass
+    if req == "cuda":
+        print("[app] POSE_DEVICE=cuda requested but onnxruntime has no CUDA "
+              "provider — falling back to cpu (install onnxruntime-gpu)")
+    return "cpu"
+
+
+POSE_DEVICE = _resolve_pose_device(os.environ.get("POSE_DEVICE", "auto"))
 VID_EXT = {".mp4", ".mov", ".webm", ".mkv", ".avi"}
 
 RUNS_DIR.mkdir(parents=True, exist_ok=True)
