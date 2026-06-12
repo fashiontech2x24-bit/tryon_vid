@@ -75,6 +75,21 @@ def _save_cached_poses(cache_path, poses, fps, n_miss):
 
 
 # --------------------------------------------------------------------------
+# Shared pose estimator (the ONNX models are large — load them once per
+# config, not once per clip; sessions are reused under the caller's lock)
+# --------------------------------------------------------------------------
+_ESTIMATORS: dict[tuple, "pr.PoseEstimator"] = {}
+
+
+def shared_estimator(mode="dwpose", device="cpu", kpt_thr=0.3, model_dir="models"):
+    key = (mode, device, kpt_thr, model_dir)
+    if key not in _ESTIMATORS:
+        _ESTIMATORS[key] = pr.PoseEstimator(mode=mode, device=device,
+                                            kpt_thr=kpt_thr, model_dir=model_dir)
+    return _ESTIMATORS[key]
+
+
+# --------------------------------------------------------------------------
 # Pipeline
 # --------------------------------------------------------------------------
 class ControlVideoPipeline:
@@ -108,7 +123,7 @@ class ControlVideoPipeline:
         self.control_video = control_video
         self.verbose = verbose
         self._log(f"loading pose model (mode={mode}, device={device}) ...")
-        self.estimator = pr.PoseEstimator(mode=mode, device=device,
+        self.estimator = shared_estimator(mode=mode, device=device,
                                           kpt_thr=kpt_thr, model_dir=model_dir)
 
         key = _control_cache_key(control_video, skip_frames, frame_load_cap,

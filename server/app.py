@@ -14,6 +14,7 @@ Per request (user uploads ONLY a reference image + picks a motion preset):
 There is no manual control-video upload — the motion comes from assets/motion_presets/.
 """
 import copy
+import hashlib
 import json
 import os
 import random
@@ -327,6 +328,31 @@ def _source_path(source_id: str) -> Path:
     return p
 
 
+def _decimated_cached(src: Path, start, end, duration, fps):
+    """Trim+decimate `src` into a deterministic cache file under _previews/.
+
+    The file name is keyed on the exact frame selection, so repeat calls with
+    the same knobs reuse it — and so does the pose pipeline's disk cache,
+    meaning pose estimation only ever runs on the ≤29 decimated frames.
+    Returns (path, plan).
+    """
+    plan = video_edit.plan_decimation(
+        _probe_cached(src), start=_fnum(start, 0.0),
+        end=_fnum(end, 0.0) or None, duration=_fnum(duration, 0.0) or None,
+        fps=_fnum(fps, video_edit.DEFAULT_FPS))
+    st = src.stat()
+    key = hashlib.sha1(
+        f"{src.resolve()}|{st.st_size}|{st.st_mtime_ns}|"
+        f"{list(plan['indices'])}|{plan['fps']}".encode()).hexdigest()[:32]
+    out = PREVIEWS_DIR / f"{key}_dec.mp4"
+    if not out.exists():
+        frames = video_edit.read_frames_at(str(src), plan["indices"])
+        video_edit.write_frames(frames, str(out), plan["fps"])
+    plan["indices"] = [int(i) for i in plan["indices"]]
+    plan["path"] = str(out)
+    return out, plan
+
+
 def _retarget_from_form(pose_mode, root_motion, smoothing, foreshorten,
                         blend_frames, head_lock):
     cfg = dict(RETARGET_DEFAULTS)
@@ -390,12 +416,8 @@ async def control_preview(source_id: str = Form(...), start: str = Form(""),
                           fps: str = Form("")):
     """Trim + uniformly decimate -> preview clip (no GPU, no pose model)."""
     src = _source_path(source_id)
-    out = PREVIEWS_DIR / f"{uuid.uuid4().hex}_dec.mp4"
     try:
-        plan = video_edit.decimate(
-            str(src), str(out), start=_fnum(start, 0.0),
-            end=_fnum(end, 0.0) or None, duration=_fnum(duration, 0.0) or None,
-            fps=_fnum(fps, video_edit.DEFAULT_FPS))
+        out, plan = _decimated_cached(src, start, end, duration, fps)
     except Exception as e:
         raise HTTPException(400, f"decimation failed: {e}")
     plan["url"] = f"/api/wb/{out.name}"
@@ -413,14 +435,27 @@ async def control_pose_preview(
     mirror: str = Form("false"),
 ):
     """Retargeted-skeleton preview of a (trimmed/decimated) source or preset
-    against a reference image. First call per source estimates its poses
-    (disk-cached) — slow on CPU, fast with POSE_DEVICE=cuda."""
+    against a reference image. The source is decimated FIRST, so pose
+    estimation only runs on the ≤29 selected frames (disk-cached per
+    trim/decimate setting)."""
     import cv2
     import numpy as np
+    cfg = _retarget_from_form(pose_mode, root_motion, smoothing, foreshorten,
+                              blend_frames, head_lock)
     if source_id:
-        clip = _source_path(source_id)
+        try:
+            clip, plan = _decimated_cached(_source_path(source_id),
+                                           start, end, duration, fps)
+        except Exception as e:
+            raise HTTPException(400, f"decimation failed: {e}")
+        indices = None  # the clip IS the selection — estimate it directly
     elif preset in list_presets():
         clip = PRESETS_DIR / preset
+        plan = video_edit.plan_decimation(
+            _probe_cached(clip), start=_fnum(start, 0.0),
+            end=_fnum(end, 0.0) or None, duration=_fnum(duration, 0.0) or None,
+            fps=_fnum(fps, video_edit.DEFAULT_FPS))
+        indices = plan["indices"]
     else:
         raise HTTPException(400, "pass source_id or a valid preset")
 
@@ -429,18 +464,12 @@ async def control_pose_preview(
     if img is None:
         raise HTTPException(400, "cannot decode reference image")
 
-    plan = video_edit.plan_decimation(
-        _probe_cached(clip), start=_fnum(start, 0.0),
-        end=_fnum(end, 0.0) or None, duration=_fnum(duration, 0.0) or None,
-        fps=_fnum(fps, video_edit.DEFAULT_FPS))
-    cfg = _retarget_from_form(pose_mode, root_motion, smoothing, foreshorten,
-                              blend_frames, head_lock)
     out = PREVIEWS_DIR / f"{uuid.uuid4().hex}_pose.mp4"
     try:
         with POSE_LOCK:
             pipe = _pipeline_for(clip)
             pipe.generate(img, str(out), fps=plan["fps"],
-                          frame_indices=plan["indices"],
+                          frame_indices=indices,
                           mirror=str(mirror).lower() in ("1", "true", "on"),
                           **cfg)
     except Exception as e:

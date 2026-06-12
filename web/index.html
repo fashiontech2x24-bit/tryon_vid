@@ -171,7 +171,7 @@
     <input id="ctlImgFile" type="file" accept="image/*" hidden />
     <div class="row">
       <button id="posePrev">Skeleton preview</button>
-      <span class="hint">first preview per source estimates its poses once (slow on CPU, cached after)</span>
+      <span class="hint">poses are estimated on the decimated clip only (≤29 frames), cached per trim/decimate setting</span>
     </div>
     <span id="ctlStage" class="stage" hidden></span>
     <div class="thumbs" style="margin-top:12px">

@@ -514,13 +514,34 @@ def retarget_poses(target_kpts, target_conf, control_poses, *,
 
 
 def render_pose_video(frames, path, width, height, fps):
-    """Encode retargeted pose frames as an mp4 skeleton video."""
-    vw = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"),
-                         max(1.0, float(fps)), (int(width), int(height)))
-    for kpts, conf in frames:
-        vw.write(draw_pose(np.zeros((int(height), int(width), 3), dtype=np.uint8),
-                           kpts, conf))
-    vw.release()
+    """Encode retargeted pose frames as an mp4 skeleton video.
+
+    Uses ffmpeg/libx264 (browsers cannot play OpenCV's mp4v); falls back to
+    cv2's writer only when ffmpeg is unavailable."""
+    import shutil
+    import subprocess
+    W, H = int(width), int(height)
+    if shutil.which("ffmpeg"):
+        w2, h2 = W // 2 * 2, H // 2 * 2  # yuv420p needs even dimensions
+        proc = subprocess.Popen(
+            ["ffmpeg", "-y", "-v", "error",
+             "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{w2}x{h2}",
+             "-r", f"{max(1.0, float(fps)):g}", "-i", "-",
+             "-c:v", "libx264", "-crf", "18", "-preset", "medium",
+             "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-an", path],
+            stdin=subprocess.PIPE)
+        for kpts, conf in frames:
+            canvas = draw_pose(np.zeros((H, W, 3), dtype=np.uint8), kpts, conf)
+            proc.stdin.write(canvas[:h2, :w2].tobytes())
+        proc.stdin.close()
+        if proc.wait() != 0:
+            raise RuntimeError(f"ffmpeg failed encoding {path}")
+    else:
+        vw = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"),
+                             max(1.0, float(fps)), (W, H))
+        for kpts, conf in frames:
+            vw.write(draw_pose(np.zeros((H, W, 3), dtype=np.uint8), kpts, conf))
+        vw.release()
     return path
 
 
