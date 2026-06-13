@@ -350,7 +350,11 @@ def _source_path(source_id: str) -> Path:
     return p
 
 
-def _decimated_cached(src: Path, start, end, duration, fps):
+def _truthy(v):
+    return str(v).lower() in ("1", "true", "on", "yes")
+
+
+def _decimated_cached(src: Path, start, end, duration, fps, reverse=False):
     """Trim+decimate `src` into a deterministic cache file under _previews/.
 
     The file name is keyed on the exact frame selection, so repeat calls with
@@ -361,7 +365,7 @@ def _decimated_cached(src: Path, start, end, duration, fps):
     plan = video_edit.plan_decimation(
         _probe_cached(src), start=_fnum(start, 0.0),
         end=_fnum(end, 0.0) or None, duration=_fnum(duration, 0.0) or None,
-        fps=_fnum(fps, video_edit.DEFAULT_FPS))
+        fps=_fnum(fps, video_edit.DEFAULT_FPS), reverse=reverse)
     st = src.stat()
     key = hashlib.sha1(
         f"{src.resolve()}|{st.st_size}|{st.st_mtime_ns}|"
@@ -435,11 +439,12 @@ def workbench_file(filename: str):
 @app.post("/api/control/preview")
 async def control_preview(source_id: str = Form(...), start: str = Form(""),
                           end: str = Form(""), duration: str = Form(""),
-                          fps: str = Form("")):
+                          fps: str = Form(""), reverse: str = Form("false")):
     """Trim + uniformly decimate -> preview clip (no GPU, no pose model)."""
     src = _source_path(source_id)
     try:
-        out, plan = _decimated_cached(src, start, end, duration, fps)
+        out, plan = _decimated_cached(src, start, end, duration, fps,
+                                      reverse=_truthy(reverse))
     except Exception as e:
         raise HTTPException(400, f"decimation failed: {e}")
     plan["url"] = f"/api/wb/{out.name}"
@@ -454,7 +459,7 @@ async def control_pose_preview(
     pose_mode: str = Form(""), root_motion: str = Form(""),
     smoothing: str = Form(""), foreshorten: str = Form(""),
     blend_frames: str = Form(""), head_lock: str = Form(""),
-    mirror: str = Form("false"),
+    mirror: str = Form("false"), reverse: str = Form("false"),
 ):
     """Retargeted-skeleton preview of a (trimmed/decimated) source or preset
     against a reference image. The source is decimated FIRST, so pose
@@ -466,8 +471,8 @@ async def control_pose_preview(
                               blend_frames, head_lock)
     if source_id:
         try:
-            clip, plan = _decimated_cached(_source_path(source_id),
-                                           start, end, duration, fps)
+            clip, plan = _decimated_cached(_source_path(source_id), start, end,
+                                           duration, fps, reverse=_truthy(reverse))
         except Exception as e:
             raise HTTPException(400, f"decimation failed: {e}")
         indices = None  # the clip IS the selection — estimate it directly
@@ -507,24 +512,27 @@ async def control_save_preset(
     pose_mode: str = Form(""), root_motion: str = Form(""),
     smoothing: str = Form(""), foreshorten: str = Form(""),
     blend_frames: str = Form(""), head_lock: str = Form(""),
+    reverse: str = Form("false"),
 ):
     """Write the decimated clip into assets/motion_presets/ plus a JSON
-    sidecar holding its retarget config (used by compose jobs)."""
+    sidecar holding its retarget config (used by compose jobs). The clip is
+    baked pose0-first when `reverse` is set, so compose needs no extra step."""
     src = _source_path(source_id)
     stem = _safe_name(Path(name).stem, "preset")
     out = PRESETS_DIR / f"{stem}.mp4"
+    rev = _truthy(reverse)
     try:
         plan = video_edit.decimate(
             str(src), str(out), start=_fnum(start, 0.0),
             end=_fnum(end, 0.0) or None, duration=_fnum(duration, 0.0) or None,
-            fps=_fnum(fps, video_edit.DEFAULT_FPS))
+            fps=_fnum(fps, video_edit.DEFAULT_FPS), reverse=rev)
     except Exception as e:
         raise HTTPException(400, f"decimation failed: {e}")
     cfg = _retarget_from_form(pose_mode, root_motion, smoothing, foreshorten,
                               blend_frames, head_lock)
     sidecar = {"source": source_id,
                "decimate": {"start": _fnum(start, 0.0), "end": _fnum(end, 0.0),
-                            "duration": _fnum(duration, 0.0),
+                            "duration": _fnum(duration, 0.0), "reverse": rev,
                             "fps": plan["fps"], "n_frames": plan["n_frames"]},
                "retarget": cfg}
     (PRESETS_DIR / f"{stem}.json").write_text(json.dumps(sidecar, indent=2))

@@ -55,12 +55,16 @@ def pick_indices(start_frame: int, end_frame: int, n_out: int) -> np.ndarray:
 
 def plan_decimation(src: dict, *, start: float = 0.0, end: float | None = None,
                     duration: float | None = None, fps: float = DEFAULT_FPS,
-                    max_frames: int = MAX_FRAMES) -> dict:
+                    max_frames: int = MAX_FRAMES, reverse: bool = False) -> dict:
     """Resolve the trim/decimate knobs against a probed source.
 
     start/end   : trim range in source seconds (end None/<=0 = clip end).
     duration    : desired OUTPUT duration in seconds (None = trimmed length).
     fps         : output frame rate.
+    reverse     : play the selection backwards (last source frame first). Use
+                  to normalise an action that ENDS at the anchor pose so the
+                  control clip instead STARTS at it (e.g. a recorded
+                  rotated->relaxed move becomes relaxed->rotated).
     Returns {indices, n_frames, fps, duration} — feed `indices` to the frame
     reader or to ControlVideoPipeline.generate(frame_indices=...).
     """
@@ -71,7 +75,10 @@ def plan_decimation(src: dict, *, start: float = 0.0, end: float | None = None,
     trimmed = (f1 - f0 + 1) / src_fps
     dur = duration if duration and duration > 0 else trimmed
     n = snap_length(min(round(dur * fps), f1 - f0 + 1, max_frames), max_frames)
-    return {"indices": pick_indices(f0, f1, n), "n_frames": int(n),
+    idx = pick_indices(f0, f1, n)
+    if reverse:
+        idx = idx[::-1]
+    return {"indices": idx, "n_frames": int(n),
             "fps": float(fps), "duration": n / float(fps)}
 
 
@@ -124,13 +131,14 @@ def write_frames(frames, path: str, fps: float, crf: int = 18,
 def decimate(input_path: str, output_path: str, *, start: float = 0.0,
              end: float | None = None, duration: float | None = None,
              fps: float = DEFAULT_FPS, max_frames: int = MAX_FRAMES,
-             crf: int = 18) -> dict:
+             crf: int = 18, reverse: bool = False) -> dict:
     """Trim + uniformly decimate a source video to a short control clip.
 
     Returns the plan dict (indices, n_frames, fps, duration) with `path` set.
     """
     plan = plan_decimation(probe_video(input_path), start=start, end=end,
-                           duration=duration, fps=fps, max_frames=max_frames)
+                           duration=duration, fps=fps, max_frames=max_frames,
+                           reverse=reverse)
     frames = read_frames_at(input_path, plan["indices"])
     write_frames(frames, output_path, plan["fps"], crf=crf)
     plan["path"] = str(output_path)
@@ -151,7 +159,11 @@ if __name__ == "__main__":
                     help="output duration (s); smaller = more frames removed")
     ap.add_argument("--fps", type=float, default=DEFAULT_FPS)
     ap.add_argument("--max_frames", type=int, default=MAX_FRAMES)
+    ap.add_argument("--reverse", action="store_true",
+                    help="play the selection backwards (normalise an action "
+                         "that ends at the anchor pose to start at it)")
     a = ap.parse_args()
     res = decimate(a.input, a.output, start=a.start, end=a.end,
-                   duration=a.duration, fps=a.fps, max_frames=a.max_frames)
+                   duration=a.duration, fps=a.fps, max_frames=a.max_frames,
+                   reverse=a.reverse)
     print(json.dumps(res))

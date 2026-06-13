@@ -151,6 +151,10 @@
       <div><label>&nbsp;</label><button class="sm" id="decPrev">Preview decimated</button></div>
     </div>
     <div class="hint">Frame count snaps to Wan's 4k+1 grid, max 29. Lower duration ⇒ more frames removed (motion plays faster).</div>
+    <div class="row" style="margin-top:10px">
+      <label style="margin:0"><input id="decReverse" type="checkbox" /> Reverse control (play backwards)</label>
+      <span class="hint">use when this action ENDS at the anchor pose, so the control clip instead STARTS at it (e.g. a recorded rotated→relaxed move becomes relaxed→rotated). The clip is baked reversed into the preset.</span>
+    </div>
     <video id="decVid" controls loop muted hidden></video>
 
     <label>Motion transfer (pose retarget) — stored with the preset</label>
@@ -413,6 +417,7 @@ function decForm() {
   fd.append("end", $("trimEnd").value);
   fd.append("duration", $("decDur").value);
   fd.append("fps", $("decFps").value);
+  fd.append("reverse", $("decReverse").checked);
   return fd;
 }
 function rtAppend(fd) {
