@@ -236,21 +236,34 @@ fi
 # 4. Demo server deps
 # ----------------------------------------------------------------------------
 say "Installing demo server + pipeline requirements"
-# On a GPU box use onnxruntime-gpu (DWPose ~10-20x faster). The CPU and GPU
-# onnxruntime distributions ship the same module and overwrite each other, so
-# install exactly one: filter the CPU pin out of requirements when GPU-bound.
+# onnxruntime: the CPU build (`onnxruntime`) and GPU build (`onnxruntime-gpu`)
+# ship the SAME import name and overwrite each other's files — installing one
+# over the other without a clean purge leaves a corrupt module whose C-backed
+# functions (e.g. get_available_providers) are missing. So always purge BOTH
+# first, install exactly one, then verify it actually imports + works.
+ort_ok() { "$PY" -c 'import onnxruntime as o; o.get_available_providers()' >/dev/null 2>&1; }
+purge_ort() { "$PY" -m pip uninstall -q -y onnxruntime onnxruntime-gpu 2>/dev/null || true; }
+
+REQ_NOORT="$(mktemp)"
+grep -viE '^[[:space:]]*onnxruntime' "$REPO_DIR/server/requirements.txt" > "$REQ_NOORT"
+"$PY" -m pip install -q -r "$REQ_NOORT"; rm -f "$REQ_NOORT"
+
 if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
-  say "NVIDIA GPU detected — using onnxruntime-gpu for pose estimation"
-  REQ_NOORT="$(mktemp)"
-  grep -viE '^[[:space:]]*onnxruntime' "$REPO_DIR/server/requirements.txt" > "$REQ_NOORT"
-  "$PY" -m pip install -q -r "$REQ_NOORT"; rm -f "$REQ_NOORT"
-  "$PY" -m pip uninstall -q -y onnxruntime 2>/dev/null || true
-  "$PY" -m pip install -q "onnxruntime-gpu>=1.18" \
-    || { echo "   (onnxruntime-gpu install failed; pose stays on CPU)"; \
-         "$PY" -m pip install -q "onnxruntime>=1.17"; }
+  say "NVIDIA GPU detected — installing onnxruntime-gpu for pose estimation"
+  purge_ort
+  "$PY" -m pip install -q --no-cache-dir "onnxruntime-gpu>=1.18" || true
+  if ort_ok; then
+    echo "   onnxruntime-gpu OK ($("$PY" -c 'import onnxruntime as o; print(o.__version__)'))"
+  else
+    echo "   onnxruntime-gpu unusable on this box (CUDA/cuDNN mismatch?) — falling back to CPU build"
+    purge_ort
+    "$PY" -m pip install -q --no-cache-dir "onnxruntime>=1.17"
+  fi
 else
-  "$PY" -m pip install -q -r "$REPO_DIR/server/requirements.txt"
+  purge_ort
+  "$PY" -m pip install -q --no-cache-dir "onnxruntime>=1.17"
 fi
+ort_ok || echo "   WARNING: onnxruntime still not importable — pose estimation will fail"
 
 # boomerang postprocess needs ffmpeg/ffprobe on PATH
 if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
