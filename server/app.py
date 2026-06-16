@@ -359,7 +359,7 @@ def _decimated_cached(src: Path, start, end, duration, fps, reverse=False):
 
     The file name is keyed on the exact frame selection, so repeat calls with
     the same knobs reuse it — and so does the pose pipeline's disk cache,
-    meaning pose estimation only ever runs on the ≤29 decimated frames.
+    meaning pose estimation only ever runs on the ≤37 decimated frames.
     Returns (path, plan).
     """
     plan = video_edit.plan_decimation(
@@ -463,7 +463,7 @@ async def control_pose_preview(
 ):
     """Retargeted-skeleton preview of a (trimmed/decimated) source or preset
     against a reference image. The source is decimated FIRST, so pose
-    estimation only runs on the ≤29 selected frames (disk-cached per
+    estimation only runs on the ≤37 selected frames (disk-cached per
     trim/decimate setting)."""
     import cv2
     import numpy as np

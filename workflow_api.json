@@ -88,7 +88,7 @@
     "inputs": {
       "width": 768,
       "height": 1024,
-      "length": 29,
+      "length": 37,
       "batch_size": 1,
       "strength": 1,
       "positive": [
