@@ -248,6 +248,39 @@ def run_job(job_id, image_path, opts):
         _set(job_id, status="error", error=str(e))
 
 
+@app.post("/api/gen_from_control")
+async def gen_from_control(
+    image: UploadFile = File(...),
+    control: UploadFile = File(...),
+    length: str = Form("29"),
+    fps: str = Form("12"),
+    seed: str = Form(""),
+):
+    """Generate a Wan VACE video directly from a PRE-MADE control video +
+    reference image — NO pose retargeting. The control skeleton is used as-is
+    (e.g. the offline direct-skeleton control), so we can fine-tune the
+    control/generation/interpolation loop without the retarget step in the way.
+    Synchronous: returns the generated mp4."""
+    job_id = uuid.uuid4().hex[:8]
+    stored_img = comfy.upload_file(
+        await image.read(),
+        f"{job_id}_{Path(image.filename or 'ref.png').name}", "image/png")
+    stored_vid = comfy.upload_file(
+        await control.read(), f"{job_id}_control.mp4", "video/mp4")
+    wf = build_workflow(stored_img, stored_vid,
+                        {"length": length, "fps": fps, "seed": seed})
+    # VHS must load the control 1:1 (no resampling) so frame count == length
+    wf[NODE_LOAD_VIDEO]["inputs"]["force_rate"] = int(float(fps))
+    history = comfy.run(wf, job_id)
+    found = ComfyClient.find_output_video(history)
+    if not found:
+        raise HTTPException(500, "ComfyUI produced no output")
+    filename, subfolder, ftype = found
+    out = RUNS_DIR / f"gfc_{job_id}.mp4"
+    out.write_bytes(comfy.get_file(filename, subfolder, ftype))
+    return FileResponse(out, media_type="video/mp4", filename=out.name)
+
+
 @app.get("/")
 def index():
     return FileResponse(WEB_DIR / "index.html")
