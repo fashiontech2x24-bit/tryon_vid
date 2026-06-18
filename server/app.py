@@ -271,7 +271,11 @@ async def gen_from_control(
                         {"length": length, "fps": fps, "seed": seed})
     # VHS must load the control 1:1 (no resampling) so frame count == length
     wf[NODE_LOAD_VIDEO]["inputs"]["force_rate"] = int(float(fps))
-    history = comfy.run(wf, job_id)
+    try:
+        history = comfy.run(wf, job_id)
+    except Exception as e:
+        # surface the real ComfyUI error (OOM, shape mismatch, ...) to the caller
+        raise HTTPException(500, f"comfy run failed: {e}")
     found = ComfyClient.find_output_video(history)
     if not found:
         raise HTTPException(500, "ComfyUI produced no output")
