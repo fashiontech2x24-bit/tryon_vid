@@ -72,6 +72,10 @@ class ComfyClient:
         )
         ws = websocket.WebSocket()
         ws.connect(ws_url, timeout=30)
+        # connect() leaves a 30s recv timeout; long generations (e.g. 81-frame
+        # sampling / VAE decode) go quiet for longer than that between ws
+        # messages, so allow generous gaps before giving up.
+        ws.settimeout(600)
         try:
             prompt_id = self.queue_prompt(workflow, client_id)
             if on_progress:
