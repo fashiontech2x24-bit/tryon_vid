@@ -632,17 +632,19 @@ def retarget_poses(target_kpts, target_conf, control_poses, *,
     return [rt.step(src_kpts, src_conf) for src_kpts, src_conf in control_poses]
 
 
-def _render_frame(W, H, kpts, conf, src_wb=None, mirror=False):
+def _render_frame(W, H, kpts, conf, src_wb=None, mirror=False, mirror_cx=None):
     """Draw one body (+ optional hands/feet) frame. ``mirror`` reflects the
-    whole retargeted pose about the neck's x in OUTPUT space and swaps L/R
-    labels — a true geometric mirror (flips the turn) with correct colors."""
+    whole retargeted pose about a FIXED vertical axis (``mirror_cx``) in OUTPUT
+    space and swaps L/R labels — a true geometric mirror (flips the turn) with
+    correct colors. The axis must be constant across frames, else the body
+    slides (reflecting about a moving axis doubles its sway)."""
     kpts = np.asarray(kpts, dtype=np.float32).copy(); conf = np.asarray(conf).copy()
     items = []
     if src_wb is not None:
         k133, s133 = src_wb
         items = hands_feet_points(kpts, conf, k133, s133)
     if mirror:
-        cx = float(kpts[ROOT][0])                 # reflect about the neck
+        cx = float(mirror_cx if mirror_cx is not None else W / 2.0)
         kpts[:, 0] = 2.0 * cx - kpts[:, 0]
         kpts = kpts[OP18_SWAP]; conf = conf[OP18_SWAP]   # keep colors on the right side
         for pts, _c, _kind, ank in items:
@@ -672,6 +674,11 @@ def render_pose_video(frames, path, width, height, fps, src_wb=None, mirror=Fals
     import subprocess
     W, H = int(width), int(height)
     wb = src_wb if src_wb is not None else [None] * len(frames)
+    # fixed mirror axis = mean neck x across all frames (constant -> no slide)
+    mcx = None
+    if mirror:
+        necks = [float(k[ROOT][0]) for k, _ in frames if _[ROOT] >= 1.0]
+        mcx = float(np.mean(necks)) if necks else W / 2.0
     if shutil.which("ffmpeg"):
         w2, h2 = W // 2 * 2, H // 2 * 2  # yuv420p needs even dimensions
         proc = subprocess.Popen(
@@ -682,7 +689,7 @@ def render_pose_video(frames, path, width, height, fps, src_wb=None, mirror=Fals
              "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-an", path],
             stdin=subprocess.PIPE)
         for (kpts, conf), s in zip(frames, wb):
-            canvas = _render_frame(W, H, kpts, conf, s, mirror)
+            canvas = _render_frame(W, H, kpts, conf, s, mirror, mcx)
             proc.stdin.write(canvas[:h2, :w2].tobytes())
         proc.stdin.close()
         if proc.wait() != 0:
@@ -691,7 +698,7 @@ def render_pose_video(frames, path, width, height, fps, src_wb=None, mirror=Fals
         vw = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"),
                              max(1.0, float(fps)), (W, H))
         for (kpts, conf), s in zip(frames, wb):
-            vw.write(_render_frame(W, H, kpts, conf, s, mirror))
+            vw.write(_render_frame(W, H, kpts, conf, s, mirror, mcx))
         vw.release()
     return path
 
