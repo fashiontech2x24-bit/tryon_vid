@@ -12,7 +12,7 @@ Wan VACE. Frames are removed UNIFORMLY across the whole trimmed range:
 so the entire trimmed motion always survives — turning the duration knob
 down drops more frames (the motion plays faster), the fps knob trades
 smoothness for frame budget. Wan VACE wants `length ≡ 1 (mod 4)`, hence the
-4k+1 snap (…, 29, 33, 37).
+4k+1 snap (…, 21, 25, 29).
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-MAX_FRAMES = 37          # Wan VACE budget used by the current 14B graph
+MAX_FRAMES = 29          # Wan VACE budget used by the current 14B graph
 DEFAULT_FPS = 12.0
 
 

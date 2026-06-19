@@ -149,8 +149,9 @@ class PoseEstimator:
                              backend=backend, device=device)
         self.kpt_thr = kpt_thr
 
-    def estimate(self, img_bgr):
-        """Return (kpts (18,2) float32, conf (18,) {0|1}) or (None, None)."""
+    def estimate_wholebody(self, img_bgr):
+        """Return the best person's full COCO-WholeBody pose
+        (kpts (133,2) float32, scores (133,) float32) or (None, None)."""
         keypoints, scores = self.body(img_bgr)
         if keypoints is None or len(keypoints) == 0:
             return None, None
@@ -165,8 +166,16 @@ class PoseEstimator:
             metric = float(s.mean()) * float(max(span[0], span[1], 1.0))
             if metric > best_metric:
                 best_metric, best = metric, i
+        return (np.asarray(keypoints[best], dtype=np.float32),
+                np.asarray(scores[best], dtype=np.float32))
+
+    def estimate(self, img_bgr):
+        """Return (kpts (18,2) float32, conf (18,) {0|1}) or (None, None)."""
+        k133, s133 = self.estimate_wholebody(img_bgr)
+        if k133 is None:
+            return None, None
         # wholebody models (DWPose, 133 kpts): first 17 are COCO body
-        return self._coco17_to_op18(keypoints[best][:17], scores[best][:17])
+        return self._coco17_to_op18(k133[:17], s133[:17])
 
     def _coco17_to_op18(self, k17, s17):
         kp = np.zeros((18, 2), dtype=np.float32)
@@ -468,6 +477,107 @@ def draw_pose(canvas, kpts, conf):
 
 
 # --------------------------------------------------------------------------
+# Hands + feet (COCO-WholeBody 133): the DWPose model already produces them;
+# OpenPose-18 drops them, so the control skeleton ends bare at the wrist and
+# VACE renders clenched fists. We keep the 133, attach the hand/foot clusters
+# to each retargeted wrist/ankle via a forearm/shin similarity transform, and
+# draw them — so VACE gets real hand/foot pose.
+# --------------------------------------------------------------------------
+import colorsys  # noqa: E402
+
+WB_LHAND = slice(91, 112)   # 21 pts -> left wrist
+WB_RHAND = slice(112, 133)  # 21 pts -> right wrist
+WB_LFOOT = slice(17, 20)    # 3 pts  -> left ankle
+WB_RFOOT = slice(20, 23)    # 3 pts  -> right ankle
+HAND_EDGES = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[0,9],[9,10],
+              [10,11],[11,12],[0,13],[13,14],[14,15],[15,16],[0,17],[17,18],[18,19],[19,20]]
+# (cluster, src-coco elbow/wrist, out-OP18 elbow/wrist)
+_HAND_ATTACH = [(WB_LHAND, 7, 9, 6, 7), (WB_RHAND, 8, 10, 3, 4)]
+# (cluster, src-coco knee/ankle, out-OP18 knee/ankle)
+_FOOT_ATTACH = [(WB_LFOOT, 13, 15, 12, 13), (WB_RFOOT, 14, 16, 9, 10)]
+# COCO-WholeBody L/R index pairs for a proper mirror (body, feet, both hands)
+_WB_MIRROR_PAIRS = ([(1,2),(3,4),(5,6),(7,8),(9,10),(11,12),(13,14),(15,16)]
+                    + [(17,20),(18,21),(19,22)] + [(91+i, 112+i) for i in range(21)])
+
+
+def _similarity(src_a, src_b, dst_a, dst_b):
+    """Transform mapping the src segment a->b onto dst a->b, anchored at the
+    tip b (rotation + uniform scale + translation)."""
+    sv = src_b - src_a; dv = dst_b - dst_a
+    sl = math.hypot(sv[0], sv[1]); dl = math.hypot(dv[0], dv[1])
+    if sl < 1e-3:
+        return lambda p: dst_b + (p - src_b)
+    s = dl / sl
+    th = math.atan2(dv[1], dv[0]) - math.atan2(sv[1], sv[0])
+    c, si = math.cos(th), math.sin(th)
+    def f(p):
+        d = (p - src_b) * s
+        return dst_b + np.array([d[0]*c - d[1]*si, d[0]*si + d[1]*c])
+    return f
+
+
+def draw_hand(canvas, pts, conf, thr=0.3):
+    for ie, (a, b) in enumerate(HAND_EDGES):
+        if conf[a] < thr or conf[b] < thr:
+            continue
+        col = tuple(int(x*255) for x in colorsys.hsv_to_rgb(ie/float(len(HAND_EDGES)), 1, 1))
+        cv2.line(canvas, tuple(pts[a].astype(int)), tuple(pts[b].astype(int)),
+                 col[::-1], 2, cv2.LINE_AA)
+    for i in range(len(pts)):
+        if conf[i] >= thr:
+            cv2.circle(canvas, tuple(pts[i].astype(int)), 3, (0, 0, 255), -1)
+
+
+def draw_feet(canvas, ankle, pts, conf, thr=0.3):
+    for i in range(len(pts)):
+        if conf[i] >= thr:
+            cv2.line(canvas, tuple(ankle.astype(int)), tuple(pts[i].astype(int)),
+                     (200, 200, 200), 2, cv2.LINE_AA)
+            cv2.circle(canvas, tuple(pts[i].astype(int)), 3, (255, 255, 255), -1)
+
+
+def coco133_to_op18(k133, s133, kpt_thr=0.3):
+    """Body-18 (kpts, conf) from the first 17 COCO joints of a 133 pose."""
+    kp = np.zeros((18, 2), dtype=np.float32); cf = np.zeros(18, dtype=np.float32)
+    for ci, oi in COCO_TO_OP18.items():
+        if s133[ci] > kpt_thr:
+            kp[oi] = k133[ci]; cf[oi] = 1.0
+    if s133[5] > kpt_thr and s133[6] > kpt_thr:
+        kp[1] = (k133[5] + k133[6]) / 2.0; cf[1] = 1.0
+    return kp, cf
+
+
+def mirror_wb(K, S):
+    """Proper left/right mirror of 133-kpt poses (N,133,*): reflect x about each
+    frame's mean x, then swap L/R indices."""
+    Km = K.copy(); Sm = S.copy()
+    cx = K[..., 0].mean(axis=1, keepdims=True)
+    Km[..., 0] = 2.0 * cx - K[..., 0]
+    swap = list(range(133))
+    for a, b in _WB_MIRROR_PAIRS:
+        swap[a], swap[b] = b, a
+    return Km[:, swap, :], Sm[:, swap]
+
+
+def draw_hands_feet(canvas, out_kpts, out_conf, src133, src_sc, thr=0.3):
+    """Attach the source 133's hand/foot clusters to the retargeted wrists/
+    ankles (forearm/shin similarity) and draw them onto canvas."""
+    for sl, c_a, c_b, op_a, op_b in _HAND_ATTACH:
+        if src_sc[c_a] < thr or src_sc[c_b] < thr or out_conf[op_a] < 1.0 or out_conf[op_b] < 1.0:
+            continue
+        T = _similarity(src133[c_a], src133[c_b], out_kpts[op_a], out_kpts[op_b])
+        hp = np.array([T(src133[j]) for j in range(sl.start, sl.stop)])
+        draw_hand(canvas, hp, src_sc[sl], thr)
+    for sl, c_a, c_b, op_a, op_b in _FOOT_ATTACH:
+        if src_sc[c_a] < thr or src_sc[c_b] < thr or out_conf[op_a] < 1.0 or out_conf[op_b] < 1.0:
+            continue
+        T = _similarity(src133[c_a], src133[c_b], out_kpts[op_a], out_kpts[op_b])
+        fp = np.array([T(src133[j]) for j in range(sl.start, sl.stop)])
+        draw_feet(canvas, out_kpts[op_b], fp, src_sc[sl], thr)
+    return canvas
+
+
+# --------------------------------------------------------------------------
 # Reusable orchestration (shared by the CLI and pose_pipeline.ControlVideoPipeline)
 # --------------------------------------------------------------------------
 def estimate_video_poses(estimator, control_video, skip_frames=0, frame_load_cap=0,
@@ -492,6 +602,26 @@ def estimate_video_poses(estimator, control_video, skip_frames=0, frame_load_cap
     return poses, fps, n_miss
 
 
+def estimate_video_poses_wb(estimator, control_video, skip_frames=0,
+                            frame_load_cap=0, select_every_nth=1, progress=True):
+    """Like estimate_video_poses but keeps the full 133 COCO-WholeBody pose.
+
+    Returns (kpts133 (N,133,2) float32, scores133 (N,133) float32, fps, n_miss).
+    """
+    K, S, fps, n_miss = [], [], 16.0, 0
+    for fps, frame in iter_video_frames(control_video, skip_frames,
+                                        frame_load_cap, select_every_nth):
+        k133, s133 = estimator.estimate_wholebody(frame)
+        if k133 is None:
+            n_miss += 1
+            k133 = np.zeros((133, 2), dtype=np.float32)
+            s133 = np.zeros(133, dtype=np.float32)
+        K.append(k133); S.append(s133)
+        if progress and len(K) % 25 == 0:
+            print(f"      {len(K)} frames ...")
+    return np.stack(K), np.stack(S), fps, n_miss
+
+
 def retarget_poses(target_kpts, target_conf, control_poses, *,
                    root_motion=1.0, smoothing=0.4, pose_mode="relative",
                    blend_frames=0, foreshorten=0.0, mirror=False,
@@ -513,14 +643,27 @@ def retarget_poses(target_kpts, target_conf, control_poses, *,
     return [rt.step(src_kpts, src_conf) for src_kpts, src_conf in control_poses]
 
 
-def render_pose_video(frames, path, width, height, fps):
+def _render_frame(W, H, kpts, conf, src_wb=None):
+    canvas = draw_pose(np.zeros((H, W, 3), dtype=np.uint8), kpts, conf)
+    if src_wb is not None:
+        k133, s133 = src_wb
+        draw_hands_feet(canvas, kpts, conf, k133, s133)
+    return canvas
+
+
+def render_pose_video(frames, path, width, height, fps, src_wb=None):
     """Encode retargeted pose frames as an mp4 skeleton video.
+
+    ``src_wb`` (optional): list aligned with ``frames`` of (kpts133, scores133)
+    source wholebody poses — when given, hand + foot skeletons are attached to
+    each retargeted wrist/ankle and drawn (so VACE gets hand/foot pose).
 
     Uses ffmpeg/libx264 (browsers cannot play OpenCV's mp4v); falls back to
     cv2's writer only when ffmpeg is unavailable."""
     import shutil
     import subprocess
     W, H = int(width), int(height)
+    wb = src_wb if src_wb is not None else [None] * len(frames)
     if shutil.which("ffmpeg"):
         w2, h2 = W // 2 * 2, H // 2 * 2  # yuv420p needs even dimensions
         proc = subprocess.Popen(
@@ -530,8 +673,8 @@ def render_pose_video(frames, path, width, height, fps):
              "-c:v", "libx264", "-crf", "18", "-preset", "medium",
              "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-an", path],
             stdin=subprocess.PIPE)
-        for kpts, conf in frames:
-            canvas = draw_pose(np.zeros((H, W, 3), dtype=np.uint8), kpts, conf)
+        for (kpts, conf), s in zip(frames, wb):
+            canvas = _render_frame(W, H, kpts, conf, s)
             proc.stdin.write(canvas[:h2, :w2].tobytes())
         proc.stdin.close()
         if proc.wait() != 0:
@@ -539,8 +682,8 @@ def render_pose_video(frames, path, width, height, fps):
     else:
         vw = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"),
                              max(1.0, float(fps)), (W, H))
-        for kpts, conf in frames:
-            vw.write(draw_pose(np.zeros((H, W, 3), dtype=np.uint8), kpts, conf))
+        for (kpts, conf), s in zip(frames, wb):
+            vw.write(_render_frame(W, H, kpts, conf, s))
         vw.release()
     return path
 

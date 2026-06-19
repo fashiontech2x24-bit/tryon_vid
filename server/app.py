@@ -81,8 +81,8 @@ PREVIEWS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Pose-retarget config "E" — the validated default; preset sidecars override it.
 RETARGET_DEFAULTS = {"pose_mode": "absolute", "root_motion": 1.0,
-                     "smoothing": 0.4, "foreshorten": 1.0, "blend_frames": 8,
-                     "head_lock": 0.0}
+                     "smoothing": 0.4, "foreshorten": 1.0, "blend_frames": 0,
+                     "head_lock": 0.3}
 
 # Node ids in workflow_api.json (active 14B graph)
 NODE_LOAD_IMAGE = "134"; NODE_LOAD_VIDEO = "151"; NODE_KSAMPLER = "3"
@@ -196,7 +196,8 @@ def run_job(job_id, image_path, opts):
                 root_motion=_fnum(opts.get("root_motion"), 1.0),
                 smoothing=_fnum(opts.get("smoothing"), 0.4),
                 foreshorten=_fnum(opts.get("foreshorten"), 1.0),
-                blend_frames=int(_fnum(opts.get("blend_frames"), 8)))
+                blend_frames=int(_fnum(opts.get("blend_frames"), 0)),
+                head_lock=_fnum(opts.get("head_lock"), 0.3))
         _set(job_id, control_url=f"/api/run/{job_id}/control.mp4")
 
         # -- [2] generate: drive ComfyUI / VACE -------------------------------
@@ -396,7 +397,7 @@ def _decimated_cached(src: Path, start, end, duration, fps, reverse=False):
 
     The file name is keyed on the exact frame selection, so repeat calls with
     the same knobs reuse it — and so does the pose pipeline's disk cache,
-    meaning pose estimation only ever runs on the ≤37 decimated frames.
+    meaning pose estimation only ever runs on the ≤29 decimated frames.
     Returns (path, plan).
     """
     plan = video_edit.plan_decimation(
@@ -500,7 +501,7 @@ async def control_pose_preview(
 ):
     """Retargeted-skeleton preview of a (trimmed/decimated) source or preset
     against a reference image. The source is decimated FIRST, so pose
-    estimation only runs on the ≤37 selected frames (disk-cached per
+    estimation only runs on the ≤29 selected frames (disk-cached per
     trim/decimate setting)."""
     import cv2
     import numpy as np

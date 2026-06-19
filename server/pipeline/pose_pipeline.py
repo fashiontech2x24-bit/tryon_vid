@@ -74,6 +74,22 @@ def _save_cached_poses(cache_path, poses, fps, n_miss):
     os.replace(tmp, cache_path)
 
 
+def _load_cached_wb(cache_path):
+    """Load cached 133-kpt wholebody poses -> (kpts133, scores133, fps, n_miss)."""
+    if not os.path.exists(cache_path):
+        return None
+    data = np.load(cache_path)
+    return (data["kpts"], data["scores"], float(data["fps"]), int(data["n_miss"]))
+
+
+def _save_cached_wb(cache_path, kpts133, scores133, fps, n_miss):
+    os.makedirs(os.path.dirname(cache_path) or ".", exist_ok=True)
+    tmp = cache_path + ".tmp.npz"
+    np.savez(tmp, kpts=kpts133.astype(np.float32), scores=scores133.astype(np.float32),
+             fps=np.float32(fps), n_miss=np.int32(n_miss))
+    os.replace(tmp, cache_path)
+
+
 # --------------------------------------------------------------------------
 # Shared pose estimator (the ONNX models are large — load them once per
 # config, not once per clip; sessions are reused under the caller's lock)
@@ -117,32 +133,55 @@ class ControlVideoPipeline:
     def __init__(self, control_video="shot3.mp4", *, device="cuda",
                  model_dir="models", cache_dir=".pose_cache",
                  skip_frames=0, frame_load_cap=0, select_every_nth=1,
-                 kpt_thr=0.3, mode="dwpose", verbose=True):
+                 kpt_thr=0.3, mode="dwpose", verbose=True, with_hands=True):
         if not os.path.exists(control_video):
             raise FileNotFoundError(f"Control video not found: {control_video}")
         self.control_video = control_video
         self.verbose = verbose
+        self.with_hands = with_hands
+        self.control_wb = None  # (kpts133, scores133) when with_hands
         self._log(f"loading pose model (mode={mode}, device={device}) ...")
         self.estimator = shared_estimator(mode=mode, device=device,
                                           kpt_thr=kpt_thr, model_dir=model_dir)
 
         key = _control_cache_key(control_video, skip_frames, frame_load_cap,
                                  select_every_nth, kpt_thr, mode)
-        cache_path = os.path.join(cache_dir, f"control_{key}.npz")
-        cached = _load_cached_poses(cache_path)
-        if cached is not None:
-            self.control_poses, self.fps, n_miss = cached
-            self._log(f"control poses loaded from cache "
-                      f"({len(self.control_poses)} frames) -> {cache_path}")
+        if with_hands:
+            # keep the full 133 (body + hands + feet); derive body-18 from it
+            cache_path = os.path.join(cache_dir, f"control_{key}_wb.npz")
+            cached = _load_cached_wb(cache_path)
+            if cached is not None:
+                K133, S133, self.fps, n_miss = cached
+                self._log(f"control wholebody poses loaded from cache "
+                          f"({len(K133)} frames) -> {cache_path}")
+            else:
+                self._log(f"estimating control wholebody poses from {control_video} ...")
+                K133, S133, self.fps, n_miss = pr.estimate_video_poses_wb(
+                    self.estimator, control_video, skip_frames,
+                    frame_load_cap, select_every_nth, progress=verbose)
+                if not len(K133):
+                    raise RuntimeError(f"No frames loaded from {control_video}")
+                _save_cached_wb(cache_path, K133, S133, self.fps, n_miss)
+                self._log(f"control wholebody poses cached -> {cache_path}")
+            self.control_wb = (K133, S133)
+            self.control_poses = [pr.coco133_to_op18(K133[i], S133[i])
+                                  for i in range(len(K133))]
         else:
-            self._log(f"estimating control poses from {control_video} ...")
-            self.control_poses, self.fps, n_miss = pr.estimate_video_poses(
-                self.estimator, control_video, skip_frames,
-                frame_load_cap, select_every_nth, progress=verbose)
-            if not self.control_poses:
-                raise RuntimeError(f"No frames loaded from {control_video}")
-            _save_cached_poses(cache_path, self.control_poses, self.fps, n_miss)
-            self._log(f"control poses cached -> {cache_path}")
+            cache_path = os.path.join(cache_dir, f"control_{key}.npz")
+            cached = _load_cached_poses(cache_path)
+            if cached is not None:
+                self.control_poses, self.fps, n_miss = cached
+                self._log(f"control poses loaded from cache "
+                          f"({len(self.control_poses)} frames) -> {cache_path}")
+            else:
+                self._log(f"estimating control poses from {control_video} ...")
+                self.control_poses, self.fps, n_miss = pr.estimate_video_poses(
+                    self.estimator, control_video, skip_frames,
+                    frame_load_cap, select_every_nth, progress=verbose)
+                if not self.control_poses:
+                    raise RuntimeError(f"No frames loaded from {control_video}")
+                _save_cached_poses(cache_path, self.control_poses, self.fps, n_miss)
+                self._log(f"control poses cached -> {cache_path}")
         if n_miss:
             self._log(f"warning: no person in {n_miss}/{len(self.control_poses)} "
                       f"control frames (pose held)")
@@ -202,19 +241,33 @@ class ControlVideoPipeline:
         self._log(f"user skeleton: {int(tgt_conf.sum())}/18 keypoints, "
                   f"canvas {W}x{H}")
 
-        poses = self.control_poses
-        if frame_indices is not None:
-            poses = [poses[int(i)] for i in frame_indices]
-        frames = pr.retarget_poses(
-            tgt_kpts, tgt_conf, poses,
-            root_motion=root_motion, smoothing=smoothing,
-            pose_mode=pose_mode, blend_frames=blend_frames,
-            foreshorten=foreshorten, mirror=mirror, head_lock=head_lock)
+        idx = (list(range(len(self.control_poses))) if frame_indices is None
+               else [int(i) for i in frame_indices])
+        src_wb = None
+        if self.with_hands and self.control_wb is not None:
+            K133, S133 = self.control_wb
+            sk, ss = K133[idx], S133[idx]                 # 133 aligned to output
+            if mirror:
+                sk, ss = pr.mirror_wb(sk, ss)             # proper L/R mirror (133)
+            poses = [pr.coco133_to_op18(sk[i], ss[i]) for i in range(len(sk))]
+            frames = pr.retarget_poses(
+                tgt_kpts, tgt_conf, poses,
+                root_motion=root_motion, smoothing=smoothing,
+                pose_mode=pose_mode, blend_frames=blend_frames,
+                foreshorten=foreshorten, mirror=False, head_lock=head_lock)
+            src_wb = [(sk[i], ss[i]) for i in range(len(sk))]
+        else:
+            poses = [self.control_poses[i] for i in idx]
+            frames = pr.retarget_poses(
+                tgt_kpts, tgt_conf, poses,
+                root_motion=root_motion, smoothing=smoothing,
+                pose_mode=pose_mode, blend_frames=blend_frames,
+                foreshorten=foreshorten, mirror=mirror, head_lock=head_lock)
 
         out_dir = os.path.dirname(output)
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)
-        pr.render_pose_video(frames, output, W, H, fps or self.fps)
+        pr.render_pose_video(frames, output, W, H, fps or self.fps, src_wb=src_wb)
         self._log(f"wrote {len(frames)} frames -> {output}")
         return output
 

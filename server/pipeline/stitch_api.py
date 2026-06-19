@@ -15,7 +15,7 @@ Per seam:     flow morph from last frame of A to first frame of B; `pause`
               the step-forward and the torso rotations).
 Global:       out_fps, crf, optional whole-video slowdown (motion-interpolated).
 
-Everything is done in memory — segments are ≤37 frames each, so a full
+Everything is done in memory — segments are ≤29 frames each, so a full
 3-segment composition is well under 100 frames.
 """
 
