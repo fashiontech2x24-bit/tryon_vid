@@ -495,9 +495,8 @@ HAND_EDGES = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[0,9],[9,10],
 _HAND_ATTACH = [(WB_LHAND, 7, 9, 6, 7), (WB_RHAND, 8, 10, 3, 4)]
 # (cluster, src-coco knee/ankle, out-OP18 knee/ankle)
 _FOOT_ATTACH = [(WB_LFOOT, 13, 15, 12, 13), (WB_RFOOT, 14, 16, 9, 10)]
-# COCO-WholeBody L/R index pairs for a proper mirror (body, feet, both hands)
-_WB_MIRROR_PAIRS = ([(1,2),(3,4),(5,6),(7,8),(9,10),(11,12),(13,14),(15,16)]
-                    + [(17,20),(18,21),(19,22)] + [(91+i, 112+i) for i in range(21)])
+# OpenPose-18 L/R swap (for the output-space mirror): keep colors on the correct side
+OP18_SWAP = np.array([MIRROR.get(i, i) for i in range(18)])
 
 
 def _similarity(src_a, src_b, dst_a, dst_b):
@@ -547,34 +546,24 @@ def coco133_to_op18(k133, s133, kpt_thr=0.3):
     return kp, cf
 
 
-def mirror_wb(K, S):
-    """Proper left/right mirror of 133-kpt poses (N,133,*): reflect x about each
-    frame's mean x, then swap L/R indices."""
-    Km = K.copy(); Sm = S.copy()
-    cx = K[..., 0].mean(axis=1, keepdims=True)
-    Km[..., 0] = 2.0 * cx - K[..., 0]
-    swap = list(range(133))
-    for a, b in _WB_MIRROR_PAIRS:
-        swap[a], swap[b] = b, a
-    return Km[:, swap, :], Sm[:, swap]
-
-
-def draw_hands_feet(canvas, out_kpts, out_conf, src133, src_sc, thr=0.3):
+def hands_feet_points(out_kpts, out_conf, src133, src_sc, thr=0.3):
     """Attach the source 133's hand/foot clusters to the retargeted wrists/
-    ankles (forearm/shin similarity) and draw them onto canvas."""
+    ankles (forearm/shin similarity). Returns drawable items:
+    [(points (K,2), conf (K,), kind 'hand'|'feet', ankle_xy|None), ...]."""
+    items = []
     for sl, c_a, c_b, op_a, op_b in _HAND_ATTACH:
         if src_sc[c_a] < thr or src_sc[c_b] < thr or out_conf[op_a] < 1.0 or out_conf[op_b] < 1.0:
             continue
         T = _similarity(src133[c_a], src133[c_b], out_kpts[op_a], out_kpts[op_b])
         hp = np.array([T(src133[j]) for j in range(sl.start, sl.stop)])
-        draw_hand(canvas, hp, src_sc[sl], thr)
+        items.append((hp, src_sc[sl].copy(), "hand", None))
     for sl, c_a, c_b, op_a, op_b in _FOOT_ATTACH:
         if src_sc[c_a] < thr or src_sc[c_b] < thr or out_conf[op_a] < 1.0 or out_conf[op_b] < 1.0:
             continue
         T = _similarity(src133[c_a], src133[c_b], out_kpts[op_a], out_kpts[op_b])
         fp = np.array([T(src133[j]) for j in range(sl.start, sl.stop)])
-        draw_feet(canvas, out_kpts[op_b], fp, src_sc[sl], thr)
-    return canvas
+        items.append((fp, src_sc[sl].copy(), "feet", out_kpts[op_b].copy()))
+    return items
 
 
 # --------------------------------------------------------------------------
@@ -643,20 +632,39 @@ def retarget_poses(target_kpts, target_conf, control_poses, *,
     return [rt.step(src_kpts, src_conf) for src_kpts, src_conf in control_poses]
 
 
-def _render_frame(W, H, kpts, conf, src_wb=None):
-    canvas = draw_pose(np.zeros((H, W, 3), dtype=np.uint8), kpts, conf)
+def _render_frame(W, H, kpts, conf, src_wb=None, mirror=False):
+    """Draw one body (+ optional hands/feet) frame. ``mirror`` reflects the
+    whole retargeted pose about the neck's x in OUTPUT space and swaps L/R
+    labels — a true geometric mirror (flips the turn) with correct colors."""
+    kpts = np.asarray(kpts, dtype=np.float32).copy(); conf = np.asarray(conf).copy()
+    items = []
     if src_wb is not None:
         k133, s133 = src_wb
-        draw_hands_feet(canvas, kpts, conf, k133, s133)
+        items = hands_feet_points(kpts, conf, k133, s133)
+    if mirror:
+        cx = float(kpts[ROOT][0])                 # reflect about the neck
+        kpts[:, 0] = 2.0 * cx - kpts[:, 0]
+        kpts = kpts[OP18_SWAP]; conf = conf[OP18_SWAP]   # keep colors on the right side
+        for pts, _c, _kind, ank in items:
+            pts[:, 0] = 2.0 * cx - pts[:, 0]
+            if ank is not None:
+                ank[0] = 2.0 * cx - ank[0]
+    canvas = draw_pose(np.zeros((H, W, 3), dtype=np.uint8), kpts, conf)
+    for pts, c, kind, ank in items:
+        if kind == "hand":
+            draw_hand(canvas, pts, c)
+        else:
+            draw_feet(canvas, ank, pts, c)
     return canvas
 
 
-def render_pose_video(frames, path, width, height, fps, src_wb=None):
+def render_pose_video(frames, path, width, height, fps, src_wb=None, mirror=False):
     """Encode retargeted pose frames as an mp4 skeleton video.
 
     ``src_wb`` (optional): list aligned with ``frames`` of (kpts133, scores133)
     source wholebody poses — when given, hand + foot skeletons are attached to
     each retargeted wrist/ankle and drawn (so VACE gets hand/foot pose).
+    ``mirror``: flip the rendered pose left<->right (true geometric mirror).
 
     Uses ffmpeg/libx264 (browsers cannot play OpenCV's mp4v); falls back to
     cv2's writer only when ffmpeg is unavailable."""
@@ -674,7 +682,7 @@ def render_pose_video(frames, path, width, height, fps, src_wb=None):
              "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-an", path],
             stdin=subprocess.PIPE)
         for (kpts, conf), s in zip(frames, wb):
-            canvas = _render_frame(W, H, kpts, conf, s)
+            canvas = _render_frame(W, H, kpts, conf, s, mirror)
             proc.stdin.write(canvas[:h2, :w2].tobytes())
         proc.stdin.close()
         if proc.wait() != 0:
@@ -683,7 +691,7 @@ def render_pose_video(frames, path, width, height, fps, src_wb=None):
         vw = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"),
                              max(1.0, float(fps)), (W, H))
         for (kpts, conf), s in zip(frames, wb):
-            vw.write(_render_frame(W, H, kpts, conf, s))
+            vw.write(_render_frame(W, H, kpts, conf, s, mirror))
         vw.release()
     return path
 

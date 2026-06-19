@@ -243,31 +243,27 @@ class ControlVideoPipeline:
 
         idx = (list(range(len(self.control_poses))) if frame_indices is None
                else [int(i) for i in frame_indices])
+        # `mirror` is applied in OUTPUT canvas space at render time (a true
+        # geometric flip); the retarget itself runs un-mirrored.
         src_wb = None
         if self.with_hands and self.control_wb is not None:
             K133, S133 = self.control_wb
             sk, ss = K133[idx], S133[idx]                 # 133 aligned to output
-            if mirror:
-                sk, ss = pr.mirror_wb(sk, ss)             # proper L/R mirror (133)
             poses = [pr.coco133_to_op18(sk[i], ss[i]) for i in range(len(sk))]
-            frames = pr.retarget_poses(
-                tgt_kpts, tgt_conf, poses,
-                root_motion=root_motion, smoothing=smoothing,
-                pose_mode=pose_mode, blend_frames=blend_frames,
-                foreshorten=foreshorten, mirror=False, head_lock=head_lock)
             src_wb = [(sk[i], ss[i]) for i in range(len(sk))]
         else:
             poses = [self.control_poses[i] for i in idx]
-            frames = pr.retarget_poses(
-                tgt_kpts, tgt_conf, poses,
-                root_motion=root_motion, smoothing=smoothing,
-                pose_mode=pose_mode, blend_frames=blend_frames,
-                foreshorten=foreshorten, mirror=mirror, head_lock=head_lock)
+        frames = pr.retarget_poses(
+            tgt_kpts, tgt_conf, poses,
+            root_motion=root_motion, smoothing=smoothing,
+            pose_mode=pose_mode, blend_frames=blend_frames,
+            foreshorten=foreshorten, mirror=False, head_lock=head_lock)
 
         out_dir = os.path.dirname(output)
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)
-        pr.render_pose_video(frames, output, W, H, fps or self.fps, src_wb=src_wb)
+        pr.render_pose_video(frames, output, W, H, fps or self.fps,
+                             src_wb=src_wb, mirror=mirror)
         self._log(f"wrote {len(frames)} frames -> {output}")
         return output
 
