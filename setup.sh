@@ -316,15 +316,19 @@ if [[ -f "$RIFE_DIR/train_log/flownet.pkl" ]]; then
   echo "   RIFE weights present (train_log/flownet.pkl)."
 else
   echo "   RIFE weights missing — attempting download…"
+  # Default to the recommended Practical-RIFE v4.25 package (matched .py +
+  # flownet.pkl). Override with RIFE_WEIGHTS_GDRIVE / RIFE_WEIGHTS_URL.
+  RIFE_WEIGHTS_GDRIVE="${RIFE_WEIGHTS_GDRIVE:-https://drive.google.com/file/d/1ZKjcbmt1hypiFprJPIKW0Tt0lr_2i7bg/view?usp=sharing}"
   "$PY" -m pip install -q gdown || true
   if [[ -n "${RIFE_WEIGHTS_URL:-}" ]]; then
     ( cd "$RIFE_DIR" && curl -fsSL "$RIFE_WEIGHTS_URL" -o _rife_w.zip \
         && unzip -oq _rife_w.zip && rm -f _rife_w.zip ) \
       || echo "   (RIFE_WEIGHTS_URL fetch failed)"
   elif [[ -n "${RIFE_WEIGHTS_GDRIVE:-}" ]]; then
-    ( cd "$RIFE_DIR" && "$PY" -m gdown --fuzzy "$RIFE_WEIGHTS_GDRIVE" -O _rife_w.zip \
+    ( cd "$RIFE_DIR" && { "$PY" -m gdown --fuzzy "$RIFE_WEIGHTS_GDRIVE" -O _rife_w.zip \
+        || gdown --fuzzy "$RIFE_WEIGHTS_GDRIVE" -O _rife_w.zip; } \
         && unzip -oq _rife_w.zip && rm -f _rife_w.zip ) \
-      || echo "   (gdown fetch failed)"
+      || echo "   (gdown fetch failed — fetch the train_log manually)"
   fi
   [[ -f "$RIFE_DIR/train_log/flownet.pkl" ]] \
     || echo "   !! RIFE weights still missing. Drop Practical-RIFE's train_log/ into
