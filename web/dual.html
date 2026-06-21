@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Rotation Studio — dual inference</title>
+<style>
+  :root {
+    --bg: #0d0f13; --panel: #161a21; --line: #262c37; --txt: #e7ebf2;
+    --muted: #8b94a6; --accent: #5b8cff; --ok: #46c98b; --err: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--txt);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 32px 20px 64px; }
+  h1 { font-size: 22px; margin: 0 0 4px; font-weight: 650; }
+  .sub { color: var(--muted); margin: 0 0 28px; font-size: 14px; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 14px; padding: 22px; margin-bottom: 20px;
+  }
+  label { display: block; font-weight: 600; margin-bottom: 8px; }
+  .drop {
+    border: 1.5px dashed var(--line); border-radius: 12px; padding: 26px;
+    text-align: center; cursor: pointer; color: var(--muted);
+    transition: border-color .15s, background .15s;
+  }
+  .drop:hover, .drop.over { border-color: var(--accent); background: #1a1f29; }
+  .drop img { max-height: 220px; max-width: 100%; border-radius: 8px; }
+  .row { display: flex; align-items: center; gap: 16px; margin-top: 22px; }
+  input[type=range] { flex: 1; accent-color: var(--accent); }
+  .pill {
+    min-width: 58px; text-align: center; font-variant-numeric: tabular-nums;
+    background: #1f2530; border: 1px solid var(--line); border-radius: 8px;
+    padding: 6px 10px; font-weight: 600;
+  }
+  button {
+    background: var(--accent); color: #fff; border: 0; border-radius: 10px;
+    padding: 12px 22px; font-size: 15px; font-weight: 650; cursor: pointer;
+    margin-top: 22px;
+  }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .bar { height: 8px; background: #1f2530; border-radius: 6px; overflow: hidden; margin-top: 6px; }
+  .bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  .stage { color: var(--muted); font-size: 13px; margin-top: 10px; }
+  .err { color: var(--err); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
+  .vid h3 { margin: 0 0 8px; font-size: 14px; font-weight: 650; }
+  .vid video { width: 100%; border-radius: 10px; background: #000; display: block; }
+  .vid a {
+    display: inline-block; margin-top: 10px; color: var(--accent);
+    text-decoration: none; font-weight: 600; font-size: 14px;
+  }
+  .times {
+    display: flex; flex-wrap: wrap; gap: 10px 22px; margin-top: 16px;
+    font-size: 13px; color: var(--muted);
+  }
+  .times b { color: var(--txt); font-variant-numeric: tabular-nums; }
+  .infer { font-size: 15px; color: var(--ok); font-weight: 650; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Rotation Studio</h1>
+  <p class="sub">One reference image → rotate-left &amp; rotate-right, looped. Two ComfyUI servers in parallel.</p>
+
+  <div class="panel">
+    <label>Reference image</label>
+    <div class="drop" id="drop">
+      <span id="dropText">Click or drop an image here</span>
+      <img id="preview" class="hidden" alt="preview" />
+    </div>
+    <input type="file" id="file" accept="image/*" class="hidden" />
+
+    <div class="row">
+      <label style="margin:0;">Slow-mo</label>
+      <input type="range" id="slow" min="1.0" max="2.0" step="0.1" value="1.2" />
+      <span class="pill" id="slowVal">1.2×</span>
+    </div>
+
+    <button id="go" disabled>Generate</button>
+  </div>
+
+  <div class="panel hidden" id="progressPanel">
+    <div class="bar"><i id="barFill"></i></div>
+    <div class="stage" id="stageText">starting…</div>
+  </div>
+
+  <div class="panel hidden" id="resultPanel">
+    <div class="infer" id="inferLine"></div>
+    <div class="grid" style="margin-top:14px;">
+      <div class="vid">
+        <h3>Rotate left</h3>
+        <video id="vidLeft" controls loop muted playsinline></video>
+        <a id="dlLeft" download>↓ Download left</a>
+      </div>
+      <div class="vid">
+        <h3>Rotate right</h3>
+        <video id="vidRight" controls loop muted playsinline></video>
+        <a id="dlRight" download>↓ Download right</a>
+      </div>
+    </div>
+    <div class="times" id="timesLine"></div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let fileBlob = null, polling = null;
+
+const drop = $("drop"), fileInput = $("file");
+drop.onclick = () => fileInput.click();
+drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over");
+  if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]); };
+fileInput.onchange = () => { if (fileInput.files[0]) setFile(fileInput.files[0]); };
+
+function setFile(f) {
+  if (!f.type.startsWith("image/")) return;
+  fileBlob = f;
+  const url = URL.createObjectURL(f);
+  $("preview").src = url; $("preview").classList.remove("hidden");
+  $("dropText").classList.add("hidden");
+  $("go").disabled = false;
+}
+
+const slow = $("slow");
+slow.oninput = () => $("slowVal").textContent = parseFloat(slow.value).toFixed(1) + "×";
+
+$("go").onclick = async () => {
+  if (!fileBlob) return;
+  $("go").disabled = true;
+  $("resultPanel").classList.add("hidden");
+  $("progressPanel").classList.remove("hidden");
+  setProgress(0.02, "submitting…");
+
+  const fd = new FormData();
+  fd.append("image", fileBlob);
+  fd.append("slowdown", slow.value);
+  let res;
+  try {
+    res = await fetch("/api/rotate", { method: "POST", body: fd }).then(r =>
+      r.ok ? r.json() : r.json().then(e => { throw new Error(e.detail || r.status); }));
+  } catch (e) {
+    setProgress(0, "error: " + e.message, true);
+    $("go").disabled = false;
+    return;
+  }
+  poll(res.job_id);
+};
+
+function setProgress(frac, text, isErr) {
+  $("barFill").style.width = Math.round((frac || 0) * 100) + "%";
+  const s = $("stageText"); s.textContent = text; s.classList.toggle("err", !!isErr);
+}
+
+function poll(jobId) {
+  clearInterval(polling);
+  polling = setInterval(async () => {
+    let j;
+    try { j = await fetch(`/api/rotate/status/${jobId}`).then(r => r.json()); }
+    catch { return; }
+    if (j.status === "error") {
+      clearInterval(polling);
+      setProgress(j.progress || 0, "error: " + (j.error || "failed"), true);
+      $("go").disabled = false;
+      return;
+    }
+    setProgress(j.progress, j.stage || j.status);
+    if (j.status === "done") {
+      clearInterval(polling);
+      showResult(jobId, j);
+      $("go").disabled = false;
+    }
+  }, 1000);
+}
+
+function showResult(jobId, j) {
+  $("progressPanel").classList.add("hidden");
+  const bust = "?t=" + Date.now();
+  $("vidLeft").src = `/api/rotate/result/${jobId}/left` + bust;
+  $("vidRight").src = `/api/rotate/result/${jobId}/right` + bust;
+  $("dlLeft").href = `/api/rotate/result/${jobId}/left`;
+  $("dlRight").href = `/api/rotate/result/${jobId}/right`;
+
+  const t = j.timings || {};
+  $("inferLine").textContent = t.inference_s != null
+    ? `⚡ Inference: ${t.inference_s}s  (left ${t.gen_left_s ?? "?"}s · right ${t.gen_right_s ?? "?"}s, in parallel)`
+    : "";
+  const parts = [];
+  if (t.retarget_s != null)   parts.push(`Pose-retarget <b>${t.retarget_s}s</b>`);
+  if (t.inference_s != null)  parts.push(`Inference <b>${t.inference_s}s</b>`);
+  if (t.postprocess_s != null)parts.push(`Postprocess <b>${t.postprocess_s}s</b>`);
+  if (t.total_s != null)      parts.push(`Total <b>${t.total_s}s</b>`);
+  $("timesLine").innerHTML = parts.join("");
+  $("resultPanel").classList.remove("hidden");
+}
+</script>
+</body>
+</html>

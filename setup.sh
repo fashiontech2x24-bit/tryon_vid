@@ -23,8 +23,12 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMFY_DIR="${COMFY_DIR:-/workspace/ComfyUI}"
 COMFY_PORT="${COMFY_PORT:-8188}"
+COMFY_PORT_A="${COMFY_PORT_A:-${COMFY_PORT:-8188}}"   # dual inference: right side
+COMFY_PORT_B="${COMFY_PORT_B:-8189}"                  # dual inference: left side
+RESERVE_VRAM="${RESERVE_VRAM:-3}"                     # GB kept free per ComfyUI instance
 APP_PORT="${APP_PORT:-8000}"
 COMFY_REF="${COMFY_REF:-v0.24.0}"   # pinned stable release; override with COMFY_REF=master
+RIFE_DIR="${RIFE_DIR:-$REPO_DIR/vendor/Practical-RIFE}"  # torch RIFE for slow-mo
 LOG_DIR="$REPO_DIR/logs"; mkdir -p "$LOG_DIR"
 
 SKIP_MODELS=0; SKIP_INSTALL=0; FRESH=0
@@ -299,62 +303,110 @@ else
 fi
 
 # ----------------------------------------------------------------------------
-# 5. Start OUR ComfyUI on a free port
+# 4c. Install Practical-RIFE (torch) for the slow-motion postprocess
+# ----------------------------------------------------------------------------
+say "Ensuring Practical-RIFE is installed at $RIFE_DIR"
+if [[ ! -d "$RIFE_DIR/.git" ]]; then
+  mkdir -p "$(dirname "$RIFE_DIR")"
+  git clone --depth 1 https://github.com/hzwer/Practical-RIFE "$RIFE_DIR" \
+    || echo "   (could not clone Practical-RIFE; clone it manually into $RIFE_DIR)"
+fi
+[[ -f "$RIFE_DIR/requirements.txt" ]] && pip_install_safe "$RIFE_DIR/requirements.txt"
+if [[ -f "$RIFE_DIR/train_log/flownet.pkl" ]]; then
+  echo "   RIFE weights present (train_log/flownet.pkl)."
+else
+  echo "   RIFE weights missing — attempting download…"
+  "$PY" -m pip install -q gdown || true
+  if [[ -n "${RIFE_WEIGHTS_URL:-}" ]]; then
+    ( cd "$RIFE_DIR" && curl -fsSL "$RIFE_WEIGHTS_URL" -o _rife_w.zip \
+        && unzip -oq _rife_w.zip && rm -f _rife_w.zip ) \
+      || echo "   (RIFE_WEIGHTS_URL fetch failed)"
+  elif [[ -n "${RIFE_WEIGHTS_GDRIVE:-}" ]]; then
+    ( cd "$RIFE_DIR" && "$PY" -m gdown --fuzzy "$RIFE_WEIGHTS_GDRIVE" -O _rife_w.zip \
+        && unzip -oq _rife_w.zip && rm -f _rife_w.zip ) \
+      || echo "   (gdown fetch failed)"
+  fi
+  [[ -f "$RIFE_DIR/train_log/flownet.pkl" ]] \
+    || echo "   !! RIFE weights still missing. Drop Practical-RIFE's train_log/ into
+   !! $RIFE_DIR (or set RIFE_WEIGHTS_URL / RIFE_WEIGHTS_GDRIVE to automate).
+   !! Slow-mo factors > 1.0 will fail until the weights are in place." >&2
+fi
+
+# ----------------------------------------------------------------------------
+# 5. Start TWO ComfyUI instances (A=right, B=left) on the one GPU
 # ----------------------------------------------------------------------------
 port_in_use() { ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]$1$"; }
 choose_port() { local p="$1" i; for i in 0 1 2 3 4; do port_in_use $((p+i)) || { echo $((p+i)); return; }; done; echo $((p+10)); }
-
-comfy_up()  { curl -fsS "http://127.0.0.1:${CHOSEN_PORT}/system_stats" >/dev/null 2>&1; }
-wait_comfy() { local n="${1:-150}" i; for ((i=0;i<n;i++)); do comfy_up && return 0; sleep 2; done; return 1; }
-
-# stop a ComfyUI WE previously started (leave the template's alone)
-[[ -f "$LOG_DIR/comfyui.pid" ]] && kill "$(cat "$LOG_DIR/comfyui.pid")" 2>/dev/null || true
-sleep 1
-
-CHOSEN_PORT="$(choose_port "$COMFY_PORT")"
-[[ "$CHOSEN_PORT" != "$COMFY_PORT" ]] && say "Port $COMFY_PORT busy — using $CHOSEN_PORT for our ComfyUI"
+comfy_up()   { curl -fsS "http://127.0.0.1:$1/system_stats" >/dev/null 2>&1; }
+wait_comfy() { local port="$1" n="${2:-180}" i; for ((i=0;i<n;i++)); do comfy_up "$port" && return 0; sleep 2; done; return 1; }
 
 EMP_ARG=()
 [[ -f "$COMFY_DIR/extra_model_paths.yaml" ]] && EMP_ARG=(--extra-model-paths-config "$COMFY_DIR/extra_model_paths.yaml")
 
-say "Starting our ComfyUI on 127.0.0.1:${CHOSEN_PORT} (log: $LOG_DIR/comfyui.log)"
-( cd "$COMFY_DIR" && nohup "$PY" main.py --listen 127.0.0.1 --port "$CHOSEN_PORT" "${EMP_ARG[@]}" \
-    >"$LOG_DIR/comfyui.log" 2>&1 & echo $! >"$LOG_DIR/comfyui.pid" )
+start_comfy() {  # <tag> <port>
+  local tag="$1" port="$2" outdir udir
+  [[ -f "$LOG_DIR/comfy_$tag.pid" ]] && kill "$(cat "$LOG_DIR/comfy_$tag.pid")" 2>/dev/null || true
+  outdir="$COMFY_DIR/output_$tag"; udir="$COMFY_DIR/user_$tag"
+  mkdir -p "$outdir" "$udir"
+  say "Starting ComfyUI [$tag] on 127.0.0.1:$port (reserve ${RESERVE_VRAM}G, log: comfy_$tag.log)"
+  ( cd "$COMFY_DIR" && nohup "$PY" main.py --listen 127.0.0.1 --port "$port" \
+      --reserve-vram "$RESERVE_VRAM" --output-directory "$outdir" \
+      --user-directory "$udir" "${EMP_ARG[@]}" \
+      >"$LOG_DIR/comfy_$tag.log" 2>&1 & echo $! >"$LOG_DIR/comfy_$tag.pid" )
+}
 
-say "Waiting for ComfyUI to be ready…"
-if wait_comfy 180; then echo "   ComfyUI is up on :${CHOSEN_PORT}"; else
-  echo "   WARNING: ComfyUI not responding — tail $LOG_DIR/comfyui.log" >&2
-fi
+# stop any single-instance ComfyUI a previous (demo) setup.sh started
+[[ -f "$LOG_DIR/comfyui.pid" ]] && kill "$(cat "$LOG_DIR/comfyui.pid")" 2>/dev/null || true
+sleep 1
+
+PORT_A="$(choose_port "$COMFY_PORT_A")"
+[[ "$COMFY_PORT_B" -le "$PORT_A" ]] && COMFY_PORT_B=$((PORT_A + 1))
+PORT_B="$(choose_port "$COMFY_PORT_B")"
+start_comfy A "$PORT_A"
+start_comfy B "$PORT_B"
+
+say "Waiting for both ComfyUI instances…"
+wait_comfy "$PORT_A" 180 && echo "   ComfyUI A (right) up on :$PORT_A" \
+  || echo "   WARNING: ComfyUI A not responding — tail $LOG_DIR/comfy_A.log" >&2
+wait_comfy "$PORT_B" 180 && echo "   ComfyUI B (left) up on :$PORT_B" \
+  || echo "   WARNING: ComfyUI B not responding — tail $LOG_DIR/comfy_B.log" >&2
 
 # ----------------------------------------------------------------------------
-# 6. Start the demo web app, pointed at our ComfyUI
+# 6. Start the dual-inference app, pointed at both ComfyUI instances
 # ----------------------------------------------------------------------------
 [[ -f "$LOG_DIR/app.pid" ]] && kill "$(cat "$LOG_DIR/app.pid")" 2>/dev/null || true
 pkill -f 'uvicorn app:app' 2>/dev/null || true
+pkill -f 'uvicorn dual_app:app' 2>/dev/null || true
 sleep 1
 
-say "Starting demo app on 0.0.0.0:${APP_PORT} (log: $LOG_DIR/app.log)"
+say "Starting dual-inference app on 0.0.0.0:${APP_PORT} (log: $LOG_DIR/app.log)"
 ( cd "$REPO_DIR/server" && \
-  COMFY_URL="http://127.0.0.1:${CHOSEN_PORT}" \
+  COMFY_URL_A="http://127.0.0.1:${PORT_A}" \
+  COMFY_URL_B="http://127.0.0.1:${PORT_B}" \
+  RIFE_DIR="$RIFE_DIR" \
+  PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-}" \
+  CALLBACK_SECRET="${CALLBACK_SECRET:-}" \
   POSE_DEVICE="${POSE_DEVICE:-auto}" \
-  nohup "$PY" -m uvicorn app:app --host 0.0.0.0 --port "$APP_PORT" \
+  nohup "$PY" -m uvicorn dual_app:app --host 0.0.0.0 --port "$APP_PORT" \
     >"$LOG_DIR/app.log" 2>&1 & echo $! >"$LOG_DIR/app.pid" )
 sleep 3
 
 cat <<EOF
 
 ============================================================
- Setup complete.
+ Dual-inference setup complete.
 
- ComfyUI (our own):   http://127.0.0.1:${CHOSEN_PORT}
- Demo web app:        http://0.0.0.0:${APP_PORT}
+ ComfyUI A (right):   http://127.0.0.1:${PORT_A}
+ ComfyUI B (left):    http://127.0.0.1:${PORT_B}
+ Rotation web app:    http://0.0.0.0:${APP_PORT}
  ComfyUI install:     $COMFY_DIR
  Models:              $MODELS_COMFY/models
+ RIFE:                $RIFE_DIR
 
- Open the demo via the Vast.ai mapped address for port ${APP_PORT}.
+ Open the app via the Vast.ai mapped address for port ${APP_PORT}.
  Make sure port ${APP_PORT} is exposed in the instance config.
 
- Logs:   $LOG_DIR/app.log   $LOG_DIR/comfyui.log
+ Logs:   $LOG_DIR/app.log   $LOG_DIR/comfy_A.log   $LOG_DIR/comfy_B.log
  Stop:   bash $REPO_DIR/stop.sh
 ============================================================
 EOF

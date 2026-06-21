@@ -1,5 +1,44 @@
 # Wan 2.1 VACE — Video Try-On Studio
 
+## Dual-inference rotation (`dual-inference` branch)
+
+A stripped-down product flow: upload **one reference image**, pick a **slow-mo
+factor**, and get back **two seamless looping videos — rotate-left and
+rotate-right**. Both are generated in parallel on two ComfyUI servers sharing
+one RTX 6000 Pro (96 GB, fp16).
+
+```
+ref image + slowdown
+   │
+   ├─[1] pose-retarget   fixed rotation preset (assets/motion_presets/rotate.mp4,
+   │        DWPose        baked from IMG_5332 0–4s reversed). One estimate of the
+   │                      user image → control_right (+ skeleton-mirrored = control_left)
+   ├─[2] dual inference   control_right → ComfyUI A (:8188)  ┐ in PARALLEL,
+   │        Wan VACE       control_left  → ComfyUI B (:8189)  ┘ shared seed
+   ├─[3] postprocess      per side: Practical-RIFE slow-mo (factor) → seamless boomerang
+   └─[4] serve+callback   two finals downloadable; both mp4s multipart-POSTed to
+            callback_url (retry+backoff). One job at a time (409 if busy).
+```
+
+* **App:** `server/dual_app.py` — `POST /api/rotate` (image + `slowdown` +
+  optional `callback_url`), `GET /api/rotate/status/{id}`,
+  `GET /api/rotate/result/{id}/{left|right}`. Per-stage + total timings
+  (incl. GPU **inference time**) are tracked and shown in the UI.
+* **UI:** `web/dual.html` — image drop + slow-mo slider (1.0–2.0, default 1.2)
+  + two players/downloads + a timings readout.
+* **RIFE:** `server/pipeline/rife_slow.py` (Practical-RIFE, CUDA). `setup.sh`
+  clones it into `vendor/Practical-RIFE`; the **weights (`train_log/`)** come
+  from Google Drive, so either set `RIFE_WEIGHTS_URL` / `RIFE_WEIGHTS_GDRIVE`
+  or drop `train_log/` in manually. `slowdown=1.0` bypasses RIFE entirely.
+* **Setup:** `bash setup.sh` now launches **two** ComfyUI (A=right, B=left,
+  `--reserve-vram ${RESERVE_VRAM:-3}` each) and the dual app on `APP_PORT`
+  (8000). Env: `COMFY_PORT_A/B`, `RESERVE_VRAM`, `RIFE_DIR`, `PUBLIC_BASE_URL`,
+  `CALLBACK_SECRET`. Local mock e2e: `localtest/test_dual_e2e.py`.
+
+---
+
+The original three-tab demo (`server/app.py`) below is unchanged.
+
 A web app for the ComfyUI **Wan 2.1 VACE V2V** workflow, with three tabs:
 
 * **Quick Generate** — the original single-preset flow: reference image +

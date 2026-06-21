@@ -1,0 +1,19 @@
+{
+  "source": "IMG_5332.mp4",
+  "decimate": {
+    "start": 0.0,
+    "end": 4.0,
+    "duration": 0.0,
+    "reverse": true,
+    "fps": 12.0,
+    "n_frames": 29
+  },
+  "retarget": {
+    "pose_mode": "absolute",
+    "root_motion": 1.0,
+    "smoothing": 0.4,
+    "foreshorten": 1.0,
+    "blend_frames": 0,
+    "head_lock": 0.3
+  }
+}

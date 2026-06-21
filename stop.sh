@@ -2,7 +2,7 @@
 # Stop the ComfyUI + demo app that setup.sh started (by pid file).
 set -uo pipefail
 LOG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/logs"
-for name in app comfyui; do
+for name in app comfyui comfy_A comfy_B; do
   f="$LOG_DIR/$name.pid"
   if [[ -f "$f" ]]; then
     pid="$(cat "$f")"
