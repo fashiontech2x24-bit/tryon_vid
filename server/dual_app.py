@@ -26,7 +26,6 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from urllib.parse import urlparse, urlunparse
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
@@ -60,9 +59,14 @@ CALLBACK_SECRET = os.environ.get("CALLBACK_SECRET", "")
 # shared secret sent as X-Internal-Auth on the result callback (same secret the
 # image box uses for /v1/vton/result).
 ASSET_INTERNAL_SECRET = os.environ.get("ASSET_INTERNAL_SECRET", "")
-# the asset-service IP changes between deploys; when set, the callback's host is
-# rewritten to this IP (port + path from the incoming callback_url are kept).
-CALLBACK_HOST_OVERRIDE = os.environ.get("CALLBACK_HOST_OVERRIDE", "").strip()
+# The box IGNORES the callback_url in the /submit request and POSTs the result to
+# this configured target instead (the asset-service base keeps changing, so it is
+# pinned on the box). Currently pointed at the local ngrok test server; will be
+# swapped to the asset-service URL once the pattern is verified. Set the env var
+# to override, or to "" to fall back to honoring the request's callback_url.
+CALLBACK_URL_OVERRIDE = os.environ.get(
+    "CALLBACK_URL_OVERRIDE",
+    "https://bayleigh-irritable-distractingly.ngrok-free.dev/v1/video/result").strip()
 
 # slowdown knob bounds (web app: slider 1.0–2.0, default 1.2)
 SLOWDOWN_MIN, SLOWDOWN_MAX, SLOWDOWN_DEFAULT = 1.0, 2.0, 1.2
@@ -365,15 +369,10 @@ def run_rotate(job_id, image_path, factor, callback_url):
 
 
 # --- asset-service /submit flow ---------------------------------------------
-def _override_callback_host(url: str) -> str:
-    """Rewrite the callback URL's host to CALLBACK_HOST_OVERRIDE (if set),
-    keeping scheme, port and path. The asset-service IP changes per deploy;
-    its port + endpoint stay constant."""
-    if not CALLBACK_HOST_OVERRIDE:
-        return url
-    p = urlparse(url)
-    netloc = CALLBACK_HOST_OVERRIDE + (f":{p.port}" if p.port else "")
-    return urlunparse(p._replace(netloc=netloc))
+def _resolve_callback(req_url: str) -> str:
+    """Where the result is POSTed: the box-configured CALLBACK_URL_OVERRIDE if
+    set (the request's callback_url is ignored), else the request's url."""
+    return CALLBACK_URL_OVERRIDE or req_url
 
 
 def _download_image(url: str, dest: Path):
@@ -387,7 +386,7 @@ def _send_video_callback(callback_url, job_id, status, video_path=None, error=No
     """multipart/form-data result POST to asset-service (/v1/video/result),
     mirroring the image box. SUCCESS attaches the mp4 as `video`; FAILED/TIMEOUT
     attach an `error`. Auth via X-Internal-Auth. Retries with backoff."""
-    url = _override_callback_host(callback_url)
+    url = _resolve_callback(callback_url)
     headers = {"X-Internal-Auth": ASSET_INTERNAL_SECRET} if ASSET_INTERNAL_SECRET else {}
     delay = 1.0
     last = "no attempt"
