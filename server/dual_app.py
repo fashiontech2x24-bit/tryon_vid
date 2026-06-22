@@ -7,9 +7,10 @@ rotate-left and rotate-right.
                       videos (one normal, one skeleton-mirrored = opposite spin)
   [2] dual inference  the two controls run in PARALLEL on two ComfyUI servers
                       (A=right, B=left) on the one RTX 6000 Pro, shared seed
-  [3] postprocess     per side: RIFE smooth slow-mo (factor) -> seamless boomerang
-  [4] serve+callback  two final mp4s downloadable; on completion both files are
-                      multipart-POSTed to the caller's callback_url (retry+backoff)
+  [3] postprocess     per side: RIFE smooth slow-mo (factor) -> seamless boomerang,
+                      then a hard-cut combine (right -> left) into one clip
+  [4] serve+callback  left/right/combined mp4s downloadable; on completion all
+                      three are multipart-POSTed to the callback_url (retry+backoff)
 
 Only ONE job runs at a time (each job uses both ComfyUI servers for its L/R
 pair); a second request while busy gets 409. Per-stage and total timings —
@@ -19,6 +20,7 @@ import copy
 import json
 import os
 import random
+import subprocess
 import sys
 import threading
 import time
@@ -58,6 +60,10 @@ SLOWDOWN_MIN, SLOWDOWN_MAX, SLOWDOWN_DEFAULT = 1.0, 2.0, 1.2
 
 # fixed generation params (the 14B graph is locked to 29 @ 12 fps)
 GEN_LENGTH, GEN_FPS = 29, 12
+# generation resolution — 9:16, kept at ~Wan's 720p training area (0.92M px) to
+# avoid above-training-res artifacts; matches the 928x1664 (0.5577) input AR to
+# within ~0.9%, so WanVaceToVideo's internal resize introduces no visible stretch.
+GEN_WIDTH, GEN_HEIGHT = 720, 1280
 # fixed boomerang params (UI only exposes slowdown; RIFE already did the slowing)
 BM_WINDOW, BM_CRF, BM_LOOP = 3, 16, True
 
@@ -150,6 +156,8 @@ def build_workflow(image_name, video_name, seed):
     wf[NODE_LOAD_VIDEO]["inputs"]["force_rate"] = GEN_FPS
     wf[NODE_KSAMPLER]["inputs"]["seed"] = int(seed)
     wf[NODE_VACE]["inputs"]["length"] = GEN_LENGTH
+    wf[NODE_VACE]["inputs"]["width"] = GEN_WIDTH
+    wf[NODE_VACE]["inputs"]["height"] = GEN_HEIGHT
     wf[NODE_CREATE_VIDEO]["inputs"]["fps"] = GEN_FPS
     return wf
 
@@ -199,6 +207,23 @@ def _postprocess_side(side, run, factor):
     return final
 
 
+def _combine(run):
+    """Hard-cut concat of the two finals into one clip: right then left.
+    Both finals share res/fps/codec, so this is a single clean re-encode."""
+    right, left = run / "right_final.mp4", run / "left_final.mp4"
+    out = run / "combined.mp4"
+    subprocess.run(
+        ["ffmpeg", "-y", "-loglevel", "error",
+         "-i", str(right), "-i", str(left), "-filter_complex",
+         "[0:v]format=yuv420p,settb=AVTB,setpts=PTS-STARTPTS[a];"
+         "[1:v]format=yuv420p,settb=AVTB,setpts=PTS-STARTPTS[b];"
+         "[a][b]concat=n=2:v=1:a=0[v]",
+         "-map", "[v]", "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p",
+         str(out)],
+        check=True)
+    return out
+
+
 def _send_callback(job_id, callback_url, status, factor, run, timings, error=None):
     """Multipart-POST both finals (+ JSON metadata) to callback_url, with
     exponential backoff until a 2xx (or attempts exhausted)."""
@@ -214,10 +239,13 @@ def _send_callback(job_id, callback_url, status, factor, run, timings, error=Non
         try:
             data = {"meta": json.dumps(meta)}
             if status == "done":
-                for side in ("left", "right"):
-                    f = (run / f"{side}_final.mp4").open("rb")
+                parts = [("left", run / "left_final.mp4"),
+                         ("right", run / "right_final.mp4"),
+                         ("combined", run / "combined.mp4")]
+                for name, p in parts:
+                    f = p.open("rb")
                     opened.append(f)
-                    files.append((f"{side}_video", (f"{side}.mp4", f, "video/mp4")))
+                    files.append((f"{name}_video", (f"{name}.mp4", f, "video/mp4")))
             r = requests.post(callback_url, data=data, files=files or None,
                               headers=headers, timeout=120)
             if 200 <= r.status_code < 300:
@@ -295,12 +323,15 @@ def run_rotate(job_id, image_path, factor, callback_url):
         t0 = time.monotonic()
         for side in ("right", "left"):
             _postprocess_side(side, run, factor)
+        # hard-cut combine: right -> left, one downloadable clip
+        _combine(run)
         timings["postprocess_s"] = round(time.monotonic() - t0, 2)
 
         timings["total_s"] = round(time.monotonic() - t_start, 2)
         _set(job_id, status="done", progress=1.0, stage="done", timings=timings,
              left_url=f"/api/rotate/result/{job_id}/left",
-             right_url=f"/api/rotate/result/{job_id}/right")
+             right_url=f"/api/rotate/result/{job_id}/right",
+             combined_url=f"/api/rotate/result/{job_id}/combined")
 
         if callback_url:
             _send_callback(job_id, callback_url, "done", factor, run, timings)
@@ -380,9 +411,10 @@ def status(job_id: str):
 
 @app.get("/api/rotate/result/{job_id}/{side}")
 def result(job_id: str, side: str):
-    if side not in ("left", "right"):
-        raise HTTPException(404, "side must be left or right")
-    path = (RUNS_DIR / job_id / f"{side}_final.mp4").resolve()
+    if side not in ("left", "right", "combined"):
+        raise HTTPException(404, "side must be left, right or combined")
+    fname = "combined.mp4" if side == "combined" else f"{side}_final.mp4"
+    path = (RUNS_DIR / job_id / fname).resolve()
     if path.parent != (RUNS_DIR / job_id).resolve() or not path.is_file():
         raise HTTPException(404, "not found")
     return FileResponse(path, media_type="video/mp4",

@@ -92,6 +92,11 @@
 
   <div class="panel hidden" id="resultPanel">
     <div class="infer" id="inferLine"></div>
+    <div class="vid" style="margin-top:14px;">
+      <h3>Combined (right → left)</h3>
+      <video id="vidCombined" controls loop muted playsinline></video>
+      <a id="dlCombined" download>↓ Download combined</a>
+    </div>
     <div class="grid" style="margin-top:14px;">
       <div class="vid">
         <h3>Rotate left</h3>
@@ -183,6 +188,8 @@ function poll(jobId) {
 function showResult(jobId, j) {
   $("progressPanel").classList.add("hidden");
   const bust = "?t=" + Date.now();
+  $("vidCombined").src = `/api/rotate/result/${jobId}/combined` + bust;
+  $("dlCombined").href = `/api/rotate/result/${jobId}/combined`;
   $("vidLeft").src = `/api/rotate/result/${jobId}/left` + bust;
   $("vidRight").src = `/api/rotate/result/${jobId}/right` + bust;
   $("dlLeft").href = `/api/rotate/result/${jobId}/left`;
