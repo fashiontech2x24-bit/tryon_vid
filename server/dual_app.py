@@ -26,9 +26,11 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from urllib.parse import urlparse, urlunparse
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel
 
 from comfy_client import ComfyClient
 
@@ -54,6 +56,13 @@ CACHE_DIR = os.environ.get("POSE_CACHE_DIR", str(ROOT / ".pose_cache"))
 ROTATE_PRESET = os.environ.get("ROTATE_PRESET", "rotate.mp4")
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
 CALLBACK_SECRET = os.environ.get("CALLBACK_SECRET", "")
+# --- asset-service /submit contract -----------------------------------------
+# shared secret sent as X-Internal-Auth on the result callback (same secret the
+# image box uses for /v1/vton/result).
+ASSET_INTERNAL_SECRET = os.environ.get("ASSET_INTERNAL_SECRET", "")
+# the asset-service IP changes between deploys; when set, the callback's host is
+# rewritten to this IP (port + path from the incoming callback_url are kept).
+CALLBACK_HOST_OVERRIDE = os.environ.get("CALLBACK_HOST_OVERRIDE", "").strip()
 
 # slowdown knob bounds (web app: slider 1.0–2.0, default 1.2)
 SLOWDOWN_MIN, SLOWDOWN_MAX, SLOWDOWN_DEFAULT = 1.0, 2.0, 1.2
@@ -263,70 +272,79 @@ def _send_callback(job_id, callback_url, status, factor, run, timings, error=Non
     _set(job_id, callback=f"failed after retries ({last})")
 
 
+def _render_core(job_id, run, image_path, factor, seed):
+    """Steps [1]-[3]: pose-retarget -> dual VACE inference -> postprocess +
+    hard-cut combine. Updates job progress; returns the stage-timings dict
+    (no total_s — the caller stamps that). Produces left/right/combined under
+    `run`. Raises on any failure."""
+    timings: dict[str, float] = {}
+    cfg = _retarget_cfg()
+
+    # -- [1] pose-retarget: one estimate of the user image, two renders ----
+    _set(job_id, status="running", progress=0.05, stage="pose-retargeting")
+    t0 = time.monotonic()
+    control_right = run / "control_right.mp4"
+    control_left = run / "control_left.mp4"
+    with POSE_LOCK:
+        pipe = _rotate_pipeline()
+        pipe.generate(str(image_path), str(control_right), fps=GEN_FPS,
+                      mirror=False, **cfg)
+        pipe.generate(str(image_path), str(control_left), fps=GEN_FPS,
+                      mirror=True, **cfg)
+    timings["retarget_s"] = round(time.monotonic() - t0, 2)
+
+    # -- [2] dual inference: both controls in PARALLEL, shared seed --------
+    _set(job_id, progress=0.15, stage="generating (Wan VACE ×2)")
+    img_bytes = image_path.read_bytes()
+    stored_img = {
+        comfy_right.base_url: comfy_right.upload_file(
+            img_bytes, f"{job_id}_ref.png", "image/png"),
+        comfy_left.base_url: comfy_left.upload_file(
+            img_bytes, f"{job_id}_ref.png", "image/png"),
+    }
+    progress = {"left": 0.0, "right": 0.0}
+    results: dict[str, object] = {}
+
+    def worker(side, client, control):
+        try:
+            results[side] = _generate_side(
+                side, client, run, stored_img, control, seed, job_id, progress)
+        except Exception as e:  # noqa: BLE001 — captured, re-raised below
+            results[side] = e
+
+    t0 = time.monotonic()
+    threads = [
+        threading.Thread(target=worker, args=("right", comfy_right, control_right)),
+        threading.Thread(target=worker, args=("left", comfy_left, control_left)),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    timings["inference_s"] = round(time.monotonic() - t0, 2)
+    for side in ("left", "right"):
+        if isinstance(results[side], Exception):
+            raise RuntimeError(f"{side} generation failed: {results[side]}")
+        timings[f"gen_{side}_s"] = round(float(results[side]), 2)
+
+    # -- [3] postprocess: RIFE slow-mo -> boomerang, per side --------------
+    _set(job_id, progress=0.72, stage="postprocess (RIFE + boomerang)")
+    t0 = time.monotonic()
+    for side in ("right", "left"):
+        _postprocess_side(side, run, factor)
+    # hard-cut combine: right -> left, one downloadable clip
+    _combine(run)
+    timings["postprocess_s"] = round(time.monotonic() - t0, 2)
+    return timings
+
+
 def run_rotate(job_id, image_path, factor, callback_url):
     run = RUNS_DIR / job_id
     timings: dict[str, float] = {}
     t_start = time.monotonic()
     try:
-        cfg = _retarget_cfg()
         seed = random.randint(0, 2**32 - 1)
-
-        # -- [1] pose-retarget: one estimate of the user image, two renders ----
-        _set(job_id, status="running", progress=0.05, stage="pose-retargeting")
-        t0 = time.monotonic()
-        control_right = run / "control_right.mp4"
-        control_left = run / "control_left.mp4"
-        with POSE_LOCK:
-            pipe = _rotate_pipeline()
-            pipe.generate(str(image_path), str(control_right), fps=GEN_FPS,
-                          mirror=False, **cfg)
-            pipe.generate(str(image_path), str(control_left), fps=GEN_FPS,
-                          mirror=True, **cfg)
-        timings["retarget_s"] = round(time.monotonic() - t0, 2)
-
-        # -- [2] dual inference: both controls in PARALLEL, shared seed --------
-        _set(job_id, progress=0.15, stage="generating (Wan VACE ×2)")
-        img_bytes = image_path.read_bytes()
-        stored_img = {
-            comfy_right.base_url: comfy_right.upload_file(
-                img_bytes, f"{job_id}_ref.png", "image/png"),
-            comfy_left.base_url: comfy_left.upload_file(
-                img_bytes, f"{job_id}_ref.png", "image/png"),
-        }
-        progress = {"left": 0.0, "right": 0.0}
-        results: dict[str, object] = {}
-
-        def worker(side, client, control):
-            try:
-                results[side] = _generate_side(
-                    side, client, run, stored_img, control, seed, job_id, progress)
-            except Exception as e:  # noqa: BLE001 — captured, re-raised below
-                results[side] = e
-
-        t0 = time.monotonic()
-        threads = [
-            threading.Thread(target=worker, args=("right", comfy_right, control_right)),
-            threading.Thread(target=worker, args=("left", comfy_left, control_left)),
-        ]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-        timings["inference_s"] = round(time.monotonic() - t0, 2)
-        for side in ("left", "right"):
-            if isinstance(results[side], Exception):
-                raise RuntimeError(f"{side} generation failed: {results[side]}")
-            timings[f"gen_{side}_s"] = round(float(results[side]), 2)
-
-        # -- [3] postprocess: RIFE slow-mo -> boomerang, per side --------------
-        _set(job_id, progress=0.72, stage="postprocess (RIFE + boomerang)")
-        t0 = time.monotonic()
-        for side in ("right", "left"):
-            _postprocess_side(side, run, factor)
-        # hard-cut combine: right -> left, one downloadable clip
-        _combine(run)
-        timings["postprocess_s"] = round(time.monotonic() - t0, 2)
-
+        timings = _render_core(job_id, run, image_path, factor, seed)
         timings["total_s"] = round(time.monotonic() - t_start, 2)
         _set(job_id, status="done", progress=1.0, stage="done", timings=timings,
              left_url=f"/api/rotate/result/{job_id}/left",
@@ -346,6 +364,86 @@ def run_rotate(job_id, image_path, factor, callback_url):
             _BUSY["job_id"] = None
 
 
+# --- asset-service /submit flow ---------------------------------------------
+def _override_callback_host(url: str) -> str:
+    """Rewrite the callback URL's host to CALLBACK_HOST_OVERRIDE (if set),
+    keeping scheme, port and path. The asset-service IP changes per deploy;
+    its port + endpoint stay constant."""
+    if not CALLBACK_HOST_OVERRIDE:
+        return url
+    p = urlparse(url)
+    netloc = CALLBACK_HOST_OVERRIDE + (f":{p.port}" if p.port else "")
+    return urlunparse(p._replace(netloc=netloc))
+
+
+def _download_image(url: str, dest: Path):
+    """GET a presigned image URL (no creds) and write it to dest."""
+    r = requests.get(url, timeout=60)
+    r.raise_for_status()
+    dest.write_bytes(r.content)
+
+
+def _send_video_callback(callback_url, job_id, status, video_path=None, error=None):
+    """multipart/form-data result POST to asset-service (/v1/video/result),
+    mirroring the image box. SUCCESS attaches the mp4 as `video`; FAILED/TIMEOUT
+    attach an `error`. Auth via X-Internal-Auth. Retries with backoff."""
+    url = _override_callback_host(callback_url)
+    headers = {"X-Internal-Auth": ASSET_INTERNAL_SECRET} if ASSET_INTERNAL_SECRET else {}
+    delay = 1.0
+    last = "no attempt"
+    for attempt in range(1, 5):
+        opened = None
+        try:
+            # send everything as multipart/form-data (text fields as (None, val))
+            parts = [("job_id", (None, job_id)), ("status", (None, status))]
+            if status == "SUCCESS" and video_path:
+                opened = open(video_path, "rb")
+                parts.append(("video", ("video.mp4", opened, "video/mp4")))
+            elif error:
+                parts.append(("error", (None, str(error))))
+            r = requests.post(url, files=parts, headers=headers, timeout=120)
+            if 200 <= r.status_code < 300:
+                _set(job_id, video_callback="delivered")
+                return
+            last = f"HTTP {r.status_code}"
+        except requests.RequestException as e:
+            last = str(e)
+        finally:
+            if opened:
+                opened.close()
+        _set(job_id, video_callback=f"retry {attempt} ({last})")
+        time.sleep(delay)
+        delay *= 2
+    _set(job_id, video_callback=f"failed after retries ({last})")
+
+
+def run_submit(job_id, image_url, callback_url, seed=None):
+    """Background runner for /submit: fetch the presigned image, render, and
+    POST the combined mp4 (or the failure) back to asset-service."""
+    run = RUNS_DIR / job_id
+    run.mkdir(parents=True, exist_ok=True)
+    t_start = time.monotonic()
+    try:
+        _set(job_id, status="running", stage="fetching image")
+        image_path = run / "reference.png"
+        _download_image(image_url, image_path)
+
+        s = int(seed) if seed is not None else random.randint(0, 2**32 - 1)
+        timings = _render_core(job_id, run, image_path, SLOWDOWN_DEFAULT, s)
+        timings["total_s"] = round(time.monotonic() - t_start, 2)
+        _set(job_id, status="done", progress=1.0, stage="done", timings=timings,
+             combined_url=f"/api/rotate/result/{job_id}/combined")
+        _send_video_callback(callback_url, job_id, "SUCCESS",
+                             video_path=run / "combined.mp4")
+    except Exception as e:  # noqa: BLE001
+        _set(job_id, status="error", error=str(e),
+             timings={"total_s": round(time.monotonic() - t_start, 2)})
+        _send_video_callback(callback_url, job_id, "FAILED", error=str(e))
+    finally:
+        with BUSY_LOCK:
+            _BUSY["job_id"] = None
+
+
 # --- API --------------------------------------------------------------------
 @app.get("/")
 def index():
@@ -359,6 +457,36 @@ def health():
             "device": POSE_DEVICE, "busy": _BUSY["job_id"] is not None,
             "slowdown": {"min": SLOWDOWN_MIN, "max": SLOWDOWN_MAX,
                          "default": SLOWDOWN_DEFAULT}}
+
+
+class SubmitReq(BaseModel):
+    job_id: str
+    image_url: str
+    callback_url: str
+    prompt: str | None = None      # accepted but ignored
+    remove_bg: bool | None = None  # accepted but ignored
+    seed: int | None = None
+
+
+@app.post("/submit")
+def submit(req: SubmitReq):
+    """asset-service entrypoint: accept a render job, run it in the background,
+    and POST the result mp4 to callback_url. Returns 202 immediately, or 409 if
+    a job is already running (single GPU)."""
+    # single-flight: one render at a time (shares the lock with /api/rotate)
+    with BUSY_LOCK:
+        if _BUSY["job_id"] is not None:
+            return JSONResponse(status_code=409, content={
+                "job_id": req.job_id, "status": "BUSY",
+                "error": "a render is already in progress; retry shortly"})
+        _BUSY["job_id"] = req.job_id
+
+    _set(req.job_id, status="queued", stage="submitted")
+    threading.Thread(
+        target=run_submit,
+        args=(req.job_id, req.image_url, req.callback_url, req.seed),
+        daemon=True).start()
+    return JSONResponse(status_code=202, content={"video_job_id": req.job_id})
 
 
 @app.post("/api/rotate")
