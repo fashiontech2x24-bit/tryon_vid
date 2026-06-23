@@ -383,12 +383,10 @@ def _download_image(url: str, dest: Path):
     dest.write_bytes(r.content)
 
 
-def _send_video_callback(callback_url, job_id, status, video_path=None, error=None,
-                         session_id=None, garment_id=None):
+def _send_video_callback(callback_url, job_id, status, video_path=None, error=None):
     """multipart/form-data result POST to asset-service (/v1/video/result),
     mirroring the image box. SUCCESS attaches the mp4 as `video`; FAILED/TIMEOUT
-    attach an `error`. session_id/garment_id are echoed back when present. Auth
-    via X-Internal-Auth. Retries with backoff."""
+    attach an `error`. Auth via X-Internal-Auth. Retries with backoff."""
     url = _resolve_callback(callback_url)
     headers = {"X-Internal-Auth": ASSET_INTERNAL_SECRET} if ASSET_INTERNAL_SECRET else {}
     auth_note = "X-Internal-Auth set" if headers else "NO auth header (secret empty!)"
@@ -401,10 +399,6 @@ def _send_video_callback(callback_url, job_id, status, video_path=None, error=No
         try:
             # send everything as multipart/form-data (text fields as (None, val))
             parts = [("job_id", (None, job_id)), ("status", (None, status))]
-            if session_id is not None:
-                parts.append(("session_id", (None, str(session_id))))
-            if garment_id is not None:
-                parts.append(("garment_id", (None, str(garment_id))))
             if status == "SUCCESS" and video_path:
                 opened = open(video_path, "rb")
                 parts.append(("video", ("video.mp4", opened, "video/mp4")))
@@ -432,16 +426,13 @@ def _send_video_callback(callback_url, job_id, status, video_path=None, error=No
     _set(job_id, video_callback=f"failed after retries ({last})")
 
 
-def run_submit(job_id, image_url, callback_url, seed=None,
-               session_id=None, garment_id=None):
+def run_submit(job_id, image_url, callback_url, seed=None):
     """Background runner for /submit: fetch the presigned image, render, and
-    POST the combined mp4 (or the failure) back to asset-service. session_id /
-    garment_id are echoed back on the callback for the backend to correlate."""
+    POST the combined mp4 (or the failure) back to asset-service."""
     run = RUNS_DIR / job_id
     run.mkdir(parents=True, exist_ok=True)
     t_start = time.monotonic()
-    print(f"[submit] job {job_id}: start (image_url={image_url}, "
-          f"session_id={session_id}, garment_id={garment_id})", flush=True)
+    print(f"[submit] job {job_id}: start (image_url={image_url})", flush=True)
     try:
         _set(job_id, status="running", stage="fetching image")
         image_path = run / "reference.png"
@@ -455,14 +446,12 @@ def run_submit(job_id, image_url, callback_url, seed=None,
         print(f"[submit] job {job_id}: render done in {timings['total_s']}s "
               f"(inference {timings.get('inference_s')}s)", flush=True)
         _send_video_callback(callback_url, job_id, "SUCCESS",
-                             video_path=run / "combined.mp4",
-                             session_id=session_id, garment_id=garment_id)
+                             video_path=run / "combined.mp4")
     except Exception as e:  # noqa: BLE001
         print(f"[submit] job {job_id}: FAILED: {e}", flush=True)
         _set(job_id, status="error", error=str(e),
              timings={"total_s": round(time.monotonic() - t_start, 2)})
-        _send_video_callback(callback_url, job_id, "FAILED", error=str(e),
-                             session_id=session_id, garment_id=garment_id)
+        _send_video_callback(callback_url, job_id, "FAILED", error=str(e))
     finally:
         with BUSY_LOCK:
             _BUSY["job_id"] = None
@@ -487,8 +476,6 @@ class SubmitReq(BaseModel):
     job_id: str
     image_url: str
     callback_url: str
-    session_id: str | None = None  # echoed back on the callback (for the backend)
-    garment_id: str | None = None  # echoed back on the callback (for the backend)
     prompt: str | None = None      # accepted but ignored
     remove_bg: bool | None = None  # accepted but ignored
     seed: int | None = None
@@ -510,9 +497,7 @@ def submit(req: SubmitReq):
     _set(req.job_id, status="queued", stage="submitted")
     threading.Thread(
         target=run_submit,
-        kwargs=dict(job_id=req.job_id, image_url=req.image_url,
-                    callback_url=req.callback_url, seed=req.seed,
-                    session_id=req.session_id, garment_id=req.garment_id),
+        args=(req.job_id, req.image_url, req.callback_url, req.seed),
         daemon=True).start()
     return JSONResponse(status_code=202, content={"video_job_id": req.job_id})
 
