@@ -102,6 +102,9 @@ else:
 # fp8_e4m3fn for fp8 storage without the fast (lower-precision) matmul.
 GEN_UNET = os.environ.get("GEN_UNET", "wan2.1_vace_14B_fp16.safetensors")
 GEN_WEIGHT_DTYPE = os.environ.get("GEN_WEIGHT_DTYPE", "fp8_e4m3fn_fast")
+# torch.compile the DiT — lossless ~10-30% speedup; the FIRST job per instance
+# pays a slow one-time compile. Disable with GEN_COMPILE=0.
+GEN_COMPILE = os.environ.get("GEN_COMPILE", "1").strip().lower() not in ("0", "false", "no", "")
 # fixed boomerang params (UI only exposes slowdown; RIFE already did the slowing)
 BM_WINDOW, BM_CRF, BM_LOOP = 3, 16, True
 
@@ -109,7 +112,7 @@ RUNS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Node ids in workflow_api.json (active 14B graph) — same as the demo app.
 NODE_LOAD_IMAGE = "134"; NODE_LOAD_VIDEO = "151"; NODE_KSAMPLER = "3"
-NODE_VACE = "49"; NODE_CREATE_VIDEO = "68"; NODE_UNET = "106"
+NODE_VACE = "49"; NODE_CREATE_VIDEO = "68"; NODE_UNET = "106"; NODE_COMPILE = "300"
 
 with open(WORKFLOW_PATH) as f:
     WORKFLOW_TEMPLATE = json.load(f)
@@ -199,6 +202,16 @@ def build_workflow(image_name, video_name, seed):
     wf[NODE_UNET]["inputs"]["unet_name"] = GEN_UNET
     wf[NODE_UNET]["inputs"]["weight_dtype"] = GEN_WEIGHT_DTYPE
     wf[NODE_CREATE_VIDEO]["inputs"]["fps"] = GEN_FPS
+    if GEN_COMPILE:
+        # insert TorchCompileModel between the KSampler's current model source
+        # (ModelSamplingSD3) and the KSampler.
+        src = wf[NODE_KSAMPLER]["inputs"]["model"]
+        wf[NODE_COMPILE] = {
+            "class_type": "TorchCompileModel",
+            "inputs": {"model": src, "backend": "inductor"},
+            "_meta": {"title": "TorchCompileModel"},
+        }
+        wf[NODE_KSAMPLER]["inputs"]["model"] = [NODE_COMPILE, 0]
     return wf
 
 
@@ -497,6 +510,7 @@ def health():
             "resolution": {"preset": RES_PRESET, "width": GEN_WIDTH,
                            "height": GEN_HEIGHT},
             "unet": GEN_UNET, "weight_dtype": GEN_WEIGHT_DTYPE,
+            "compile": GEN_COMPILE,
             "slowdown": {"min": SLOWDOWN_MIN, "max": SLOWDOWN_MAX,
                          "default": SLOWDOWN_DEFAULT}}
 
