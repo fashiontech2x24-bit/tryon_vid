@@ -74,10 +74,19 @@ SLOWDOWN_MIN, SLOWDOWN_MAX, SLOWDOWN_DEFAULT = 1.0, 2.0, 1.2
 
 # fixed generation params (the 14B graph is locked to 29 @ 12 fps)
 GEN_LENGTH, GEN_FPS = 29, 12
-# generation resolution — 9:16, kept at ~Wan's 720p training area (0.92M px) to
-# avoid above-training-res artifacts; matches the 928x1664 (0.5577) input AR to
-# within ~0.9%, so WanVaceToVideo's internal resize introduces no visible stretch.
-GEN_WIDTH, GEN_HEIGHT = 720, 1280
+# generation resolution presets — both ~9:16, matching the 928x1664 (29:52) input
+# AR. 720p sits at ~Wan's training area (sharpest); 480p is the exact 29:52 rung
+# at ~0.42x the latent tokens -> big inference speedup for lower detail. Choose
+# via the RES_PRESET env var (env-only; switch by restart).
+RES_PRESETS = {"720p": (720, 1280), "480p": (464, 832)}
+RES_PRESET = os.environ.get("RES_PRESET", "720p").strip().lower()
+if RES_PRESET not in RES_PRESETS:
+    print(f"[dual_app] unknown RES_PRESET={RES_PRESET!r}; falling back to 720p")
+    RES_PRESET = "720p"
+GEN_WIDTH, GEN_HEIGHT = RES_PRESETS[RES_PRESET]
+# diffusion model: fp8 is faster on Blackwell (native fp8 tensor cores) + ~half
+# the VRAM; set GEN_UNET=wan2.1_vace_14B_fp16.safetensors for max quality.
+GEN_UNET = os.environ.get("GEN_UNET", "wan2.1_vace_14B_fp8_e4m3fn.safetensors")
 # fixed boomerang params (UI only exposes slowdown; RIFE already did the slowing)
 BM_WINDOW, BM_CRF, BM_LOOP = 3, 16, True
 
@@ -85,7 +94,7 @@ RUNS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Node ids in workflow_api.json (active 14B graph) — same as the demo app.
 NODE_LOAD_IMAGE = "134"; NODE_LOAD_VIDEO = "151"; NODE_KSAMPLER = "3"
-NODE_VACE = "49"; NODE_CREATE_VIDEO = "68"
+NODE_VACE = "49"; NODE_CREATE_VIDEO = "68"; NODE_UNET = "106"
 
 with open(WORKFLOW_PATH) as f:
     WORKFLOW_TEMPLATE = json.load(f)
@@ -172,6 +181,7 @@ def build_workflow(image_name, video_name, seed):
     wf[NODE_VACE]["inputs"]["length"] = GEN_LENGTH
     wf[NODE_VACE]["inputs"]["width"] = GEN_WIDTH
     wf[NODE_VACE]["inputs"]["height"] = GEN_HEIGHT
+    wf[NODE_UNET]["inputs"]["unet_name"] = GEN_UNET
     wf[NODE_CREATE_VIDEO]["inputs"]["fps"] = GEN_FPS
     return wf
 
@@ -468,6 +478,8 @@ def health():
     return {"comfy_right": comfy_right.is_up(), "comfy_left": comfy_left.is_up(),
             "comfy_right_url": COMFY_URL_A, "comfy_left_url": COMFY_URL_B,
             "device": POSE_DEVICE, "busy": _BUSY["job_id"] is not None,
+            "resolution": {"preset": RES_PRESET, "width": GEN_WIDTH,
+                           "height": GEN_HEIGHT}, "unet": GEN_UNET,
             "slowdown": {"min": SLOWDOWN_MIN, "max": SLOWDOWN_MAX,
                          "default": SLOWDOWN_DEFAULT}}
 

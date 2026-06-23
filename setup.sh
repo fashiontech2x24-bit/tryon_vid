@@ -144,6 +144,26 @@ if [[ "$SKIP_INSTALL" -eq 0 ]]; then
   }
   install_node "ComfyUI-Manager"          "https://github.com/ltdrdata/ComfyUI-Manager"
   install_node "ComfyUI-VideoHelperSuite" "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite"
+
+  # SageAttention 2 — quantized attention (lossless), big speedup on Blackwell
+  # (RTX 6000 Pro, sm_120). Built from source since PyPI ships v1 (no Blackwell).
+  # Best-effort: if the build fails, ComfyUI just runs without it (flag is gated).
+  if [[ "${USE_SAGE_ATTENTION:-1}" != "0" ]] && ! "$PY" -c 'import sageattention' 2>/dev/null; then
+    say "Installing SageAttention 2 (source build for Blackwell sm_120; this can take a while)"
+    SAGE_DIR="$REPO_DIR/vendor/SageAttention"
+    if [[ ! -d "$SAGE_DIR/.git" ]]; then
+      mkdir -p "$(dirname "$SAGE_DIR")"
+      git clone --depth 1 https://github.com/thu-ml/SageAttention "$SAGE_DIR" \
+        || echo "   (could not clone SageAttention; continuing without it)"
+    fi
+    if [[ -d "$SAGE_DIR" ]]; then
+      ( cd "$SAGE_DIR" && EXT_PARALLEL=4 NVCC_APPEND_FLAGS="--threads 8" MAX_JOBS=32 \
+          "$PY" -m pip install -e . ) \
+        || echo "   (SageAttention build failed — ComfyUI will run without it)"
+    fi
+    "$PY" -c 'import sageattention' 2>/dev/null \
+      && say "SageAttention import OK" || echo "   SageAttention not importable"
+  fi
 else
   say "Skipping ComfyUI/node install (--skip-comfy-install)"
 fi
@@ -216,6 +236,7 @@ REQUIRED_MODELS=(
   "vae/wan_2.1_vae.safetensors"
   "diffusion_models/wan2.1_vace_1.3B_fp16.safetensors"
   "diffusion_models/wan2.1_vace_14B_fp16.safetensors"
+  "diffusion_models/wan2.1_vace_14B_fp8_e4m3fn.safetensors"
   "loras/Wan21_CausVid_bidirect2_T2V_1_3B_lora_rank32.safetensors"
   "loras/Wan21_CausVid_14B_T2V_lora_rank32.safetensors"
 )
@@ -348,6 +369,20 @@ wait_comfy() { local port="$1" n="${2:-180}" i; for ((i=0;i<n;i++)); do comfy_up
 EMP_ARG=()
 [[ -f "$COMFY_DIR/extra_model_paths.yaml" ]] && EMP_ARG=(--extra-model-paths-config "$COMFY_DIR/extra_model_paths.yaml")
 
+# SageAttention: only pass --use-sage-attention if it actually imports, so a
+# failed/incompatible build doesn't crash ComfyUI on startup.
+SAGE_ARG=()
+if [[ "${USE_SAGE_ATTENTION:-1}" != "0" ]] && "$PY" -c 'import sageattention' 2>/dev/null; then
+  SAGE_ARG=(--use-sage-attention); say "ComfyUI: SageAttention ENABLED"
+else
+  say "ComfyUI: SageAttention not enabled (not importable or USE_SAGE_ATTENTION=0)"
+fi
+
+# --highvram: keep the (fp8) model resident on the 96 GB card so it isn't
+# re-staged every job. Disable with HIGHVRAM=0.
+HIGHVRAM_ARG=()
+[[ "${HIGHVRAM:-1}" != "0" ]] && HIGHVRAM_ARG=(--highvram)
+
 start_comfy() {  # <tag> <port>
   local tag="$1" port="$2" outdir udir
   [[ -f "$LOG_DIR/comfy_$tag.pid" ]] && kill "$(cat "$LOG_DIR/comfy_$tag.pid")" 2>/dev/null || true
@@ -356,7 +391,7 @@ start_comfy() {  # <tag> <port>
   say "Starting ComfyUI [$tag] on 127.0.0.1:$port (reserve ${RESERVE_VRAM}G, log: comfy_$tag.log)"
   ( cd "$COMFY_DIR" && nohup "$PY" main.py --listen 127.0.0.1 --port "$port" \
       --reserve-vram "$RESERVE_VRAM" --output-directory "$outdir" \
-      --user-directory "$udir" "${EMP_ARG[@]}" \
+      --user-directory "$udir" "${EMP_ARG[@]}" "${SAGE_ARG[@]}" "${HIGHVRAM_ARG[@]}" \
       >"$LOG_DIR/comfy_$tag.log" 2>&1 & echo $! >"$LOG_DIR/comfy_$tag.pid" )
 }
 

@@ -157,6 +157,11 @@ fetch "Comfy-Org/Wan_2.1_ComfyUI_repackaged" \
       "split_files/diffusion_models/wan2.1_vace_14B_fp16.safetensors" \
       "$DIR_DIFF" "wan2.1_vace_14B_fp16.safetensors"
 
+# fp8 14B — default generation model (faster on Blackwell + ~half the VRAM)
+fetch "Comfy-Org/Wan_2.1_ComfyUI_repackaged" \
+      "split_files/diffusion_models/wan2.1_vace_14B_fp8_e4m3fn.safetensors" \
+      "$DIR_DIFF" "wan2.1_vace_14B_fp8_e4m3fn.safetensors"
+
 # --- CausVid LoRAs: 1.3B bidirect2 (new) + 14B (kept from nihal_kollam) ---
 fetch "Kijai/WanVideo_comfy" \
       "Wan21_CausVid_bidirect2_T2V_1_3B_lora_rank32.safetensors" \
