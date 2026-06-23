@@ -84,9 +84,13 @@ if RES_PRESET not in RES_PRESETS:
     print(f"[dual_app] unknown RES_PRESET={RES_PRESET!r}; falling back to 720p")
     RES_PRESET = "720p"
 GEN_WIDTH, GEN_HEIGHT = RES_PRESETS[RES_PRESET]
-# diffusion model: fp8 is faster on Blackwell (native fp8 tensor cores) + ~half
-# the VRAM; set GEN_UNET=wan2.1_vace_14B_fp16.safetensors for max quality.
-GEN_UNET = os.environ.get("GEN_UNET", "wan2.1_vace_14B_fp8_e4m3fn.safetensors")
+# diffusion model + load dtype. There's no native fp8 VACE-14B checkpoint, so we
+# load the fp16 file and let ComfyUI cast it to fp8 at load time:
+# fp8_e4m3fn_fast uses Blackwell's fp8 tensor cores -> faster + ~half the VRAM.
+# Set GEN_WEIGHT_DTYPE=default for full fp16 compute (max quality), or
+# fp8_e4m3fn for fp8 storage without the fast (lower-precision) matmul.
+GEN_UNET = os.environ.get("GEN_UNET", "wan2.1_vace_14B_fp16.safetensors")
+GEN_WEIGHT_DTYPE = os.environ.get("GEN_WEIGHT_DTYPE", "fp8_e4m3fn_fast")
 # fixed boomerang params (UI only exposes slowdown; RIFE already did the slowing)
 BM_WINDOW, BM_CRF, BM_LOOP = 3, 16, True
 
@@ -182,6 +186,7 @@ def build_workflow(image_name, video_name, seed):
     wf[NODE_VACE]["inputs"]["width"] = GEN_WIDTH
     wf[NODE_VACE]["inputs"]["height"] = GEN_HEIGHT
     wf[NODE_UNET]["inputs"]["unet_name"] = GEN_UNET
+    wf[NODE_UNET]["inputs"]["weight_dtype"] = GEN_WEIGHT_DTYPE
     wf[NODE_CREATE_VIDEO]["inputs"]["fps"] = GEN_FPS
     return wf
 
@@ -479,7 +484,8 @@ def health():
             "comfy_right_url": COMFY_URL_A, "comfy_left_url": COMFY_URL_B,
             "device": POSE_DEVICE, "busy": _BUSY["job_id"] is not None,
             "resolution": {"preset": RES_PRESET, "width": GEN_WIDTH,
-                           "height": GEN_HEIGHT}, "unet": GEN_UNET,
+                           "height": GEN_HEIGHT},
+            "unet": GEN_UNET, "weight_dtype": GEN_WEIGHT_DTYPE,
             "slowdown": {"min": SLOWDOWN_MIN, "max": SLOWDOWN_MAX,
                          "default": SLOWDOWN_DEFAULT}}
 

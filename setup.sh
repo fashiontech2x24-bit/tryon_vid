@@ -236,7 +236,6 @@ REQUIRED_MODELS=(
   "vae/wan_2.1_vae.safetensors"
   "diffusion_models/wan2.1_vace_1.3B_fp16.safetensors"
   "diffusion_models/wan2.1_vace_14B_fp16.safetensors"
-  "diffusion_models/wan2.1_vace_14B_fp8_e4m3fn.safetensors"
   "loras/Wan21_CausVid_bidirect2_T2V_1_3B_lora_rank32.safetensors"
   "loras/Wan21_CausVid_14B_T2V_lora_rank32.safetensors"
 )

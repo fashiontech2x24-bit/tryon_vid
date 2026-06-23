@@ -156,11 +156,8 @@ fetch "Comfy-Org/Wan_2.1_ComfyUI_repackaged" \
 fetch "Comfy-Org/Wan_2.1_ComfyUI_repackaged" \
       "split_files/diffusion_models/wan2.1_vace_14B_fp16.safetensors" \
       "$DIR_DIFF" "wan2.1_vace_14B_fp16.safetensors"
-
-# fp8 14B — default generation model (faster on Blackwell + ~half the VRAM)
-fetch "Comfy-Org/Wan_2.1_ComfyUI_repackaged" \
-      "split_files/diffusion_models/wan2.1_vace_14B_fp8_e4m3fn.safetensors" \
-      "$DIR_DIFF" "wan2.1_vace_14B_fp8_e4m3fn.safetensors"
+# (no native fp8 VACE-14B checkpoint exists; the app casts fp16 -> fp8 at load
+#  time via the UNETLoader weight_dtype, so no separate fp8 download is needed.)
 
 # --- CausVid LoRAs: 1.3B bidirect2 (new) + 14B (kept from nihal_kollam) ---
 fetch "Kijai/WanVideo_comfy" \
