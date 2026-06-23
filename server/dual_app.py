@@ -60,13 +60,13 @@ CALLBACK_SECRET = os.environ.get("CALLBACK_SECRET", "")
 # image box uses for /v1/vton/result).
 ASSET_INTERNAL_SECRET = os.environ.get("ASSET_INTERNAL_SECRET", "")
 # The box IGNORES the callback_url in the /submit request and POSTs the result to
-# this configured target instead (the asset-service base keeps changing, so it is
-# pinned on the box). Currently pointed at the local ngrok test server; will be
-# swapped to the asset-service URL once the pattern is verified. Set the env var
-# to override, or to "" to fall back to honoring the request's callback_url.
+# this configured target instead (the asset-service IP keeps changing, so it is
+# pinned on the box; its port 9009 + /v1/video/result path stay constant). Set the
+# CALLBACK_URL_OVERRIDE env var to point elsewhere (e.g. an ngrok test server), or
+# to "" to fall back to honoring the request's callback_url.
 CALLBACK_URL_OVERRIDE = os.environ.get(
     "CALLBACK_URL_OVERRIDE",
-    "https://bayleigh-irritable-distractingly.ngrok-free.dev/v1/video/result").strip()
+    "http://3.110.84.73:9009/v1/video/result").strip()
 
 # slowdown knob bounds (web app: slider 1.0–2.0, default 1.2)
 SLOWDOWN_MIN, SLOWDOWN_MAX, SLOWDOWN_DEFAULT = 1.0, 2.0, 1.2
