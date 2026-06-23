@@ -74,16 +74,27 @@ SLOWDOWN_MIN, SLOWDOWN_MAX, SLOWDOWN_DEFAULT = 1.0, 2.0, 1.2
 
 # fixed generation params (the 14B graph is locked to 29 @ 12 fps)
 GEN_LENGTH, GEN_FPS = 29, 12
-# generation resolution presets — both ~9:16, matching the 928x1664 (29:52) input
-# AR. 720p sits at ~Wan's training area (sharpest); 480p is the exact 29:52 rung
-# at ~0.42x the latent tokens -> big inference speedup for lower detail. Choose
-# via the RES_PRESET env var (env-only; switch by restart).
-RES_PRESETS = {"720p": (720, 1280), "480p": (464, 832)}
+# generation resolution presets — all ~9:16, matching the 928x1664 input AR.
+# 720p sits at ~Wan's training area (sharpest); lower = fewer latent tokens =
+# faster but softer. Choose via RES_PRESET (env-only; switch by restart). The
+# value may be a named preset OR an explicit "WxH" (rounded down to /16).
+RES_PRESETS = {"720p": (720, 1280), "576p": (576, 1024), "480p": (464, 832)}
 RES_PRESET = os.environ.get("RES_PRESET", "720p").strip().lower()
-if RES_PRESET not in RES_PRESETS:
+if RES_PRESET in RES_PRESETS:
+    GEN_WIDTH, GEN_HEIGHT = RES_PRESETS[RES_PRESET]
+elif "x" in RES_PRESET:
+    try:
+        _w, _h = (int(v) for v in RES_PRESET.split("x", 1))
+        GEN_WIDTH, GEN_HEIGHT = (_w // 16) * 16, (_h // 16) * 16
+        if GEN_WIDTH < 16 or GEN_HEIGHT < 16:
+            raise ValueError("too small")
+        print(f"[dual_app] RES_PRESET={RES_PRESET!r} -> {GEN_WIDTH}x{GEN_HEIGHT} (/16)")
+    except ValueError:
+        print(f"[dual_app] bad RES_PRESET={RES_PRESET!r}; falling back to 720p")
+        GEN_WIDTH, GEN_HEIGHT = RES_PRESETS["720p"]
+else:
     print(f"[dual_app] unknown RES_PRESET={RES_PRESET!r}; falling back to 720p")
-    RES_PRESET = "720p"
-GEN_WIDTH, GEN_HEIGHT = RES_PRESETS[RES_PRESET]
+    GEN_WIDTH, GEN_HEIGHT = RES_PRESETS["720p"]
 # diffusion model + load dtype. There's no native fp8 VACE-14B checkpoint, so we
 # load the fp16 file and let ComfyUI cast it to fp8 at load time:
 # fp8_e4m3fn_fast uses Blackwell's fp8 tensor cores -> faster + ~half the VRAM.
