@@ -377,10 +377,10 @@ else
   say "ComfyUI: SageAttention not enabled (not importable or USE_SAGE_ATTENTION=0)"
 fi
 
-# --highvram: keep the (fp8) model resident on the 96 GB card so it isn't
-# re-staged every job. Disable with HIGHVRAM=0.
-HIGHVRAM_ARG=()
-[[ "${HIGHVRAM:-1}" != "0" ]] && HIGHVRAM_ARG=(--highvram)
+# NOTE: do NOT use --highvram here. Two ComfyUI instances share the one GPU; with
+# --highvram each pins its full model + working set and together they exceed the
+# 95 GB card (OOM). Default offloading lets both coexist (reserve-vram keeps a
+# margin). Only safe with a single instance.
 
 start_comfy() {  # <tag> <port>
   local tag="$1" port="$2" outdir udir
@@ -390,7 +390,7 @@ start_comfy() {  # <tag> <port>
   say "Starting ComfyUI [$tag] on 127.0.0.1:$port (reserve ${RESERVE_VRAM}G, log: comfy_$tag.log)"
   ( cd "$COMFY_DIR" && nohup "$PY" main.py --listen 127.0.0.1 --port "$port" \
       --reserve-vram "$RESERVE_VRAM" --output-directory "$outdir" \
-      --user-directory "$udir" "${EMP_ARG[@]}" "${SAGE_ARG[@]}" "${HIGHVRAM_ARG[@]}" \
+      --user-directory "$udir" "${EMP_ARG[@]}" "${SAGE_ARG[@]}" \
       >"$LOG_DIR/comfy_$tag.log" 2>&1 & echo $! >"$LOG_DIR/comfy_$tag.pid" )
 }
 
