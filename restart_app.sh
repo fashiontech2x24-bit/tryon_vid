@@ -41,7 +41,7 @@ echo "Starting dual_app on 0.0.0.0:${APP_PORT}  (PY=$PY)"
   COMFY_URL_A="${COMFY_URL_A:-http://127.0.0.1:8188}" \
   COMFY_URL_B="${COMFY_URL_B:-http://127.0.0.1:8189}" \
   POSE_DEVICE="${POSE_DEVICE:-auto}" \
-  ASSET_INTERNAL_SECRET="${ASSET_INTERNAL_SECRET:-}" \
+  ${ASSET_INTERNAL_SECRET:+ASSET_INTERNAL_SECRET="$ASSET_INTERNAL_SECRET"} \
   ${CALLBACK_URL_OVERRIDE:+CALLBACK_URL_OVERRIDE="$CALLBACK_URL_OVERRIDE"} \
   nohup "$PY" -m uvicorn dual_app:app --host 0.0.0.0 --port "$APP_PORT" \
     </dev/null >"$LOG_DIR/app.log" 2>&1 & echo $! >"$LOG_DIR/app.pid" )

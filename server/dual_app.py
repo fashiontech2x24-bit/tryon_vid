@@ -389,6 +389,9 @@ def _send_video_callback(callback_url, job_id, status, video_path=None, error=No
     attach an `error`. Auth via X-Internal-Auth. Retries with backoff."""
     url = _resolve_callback(callback_url)
     headers = {"X-Internal-Auth": ASSET_INTERNAL_SECRET} if ASSET_INTERNAL_SECRET else {}
+    auth_note = "X-Internal-Auth set" if headers else "NO auth header (secret empty!)"
+    print(f"[callback] job {job_id}: POST status={status} -> {url} ({auth_note})",
+          flush=True)
     delay = 1.0
     last = "no attempt"
     for attempt in range(1, 5):
@@ -404,6 +407,8 @@ def _send_video_callback(callback_url, job_id, status, video_path=None, error=No
             r = requests.post(url, files=parts, headers=headers, timeout=120)
             if 200 <= r.status_code < 300:
                 _set(job_id, video_callback="delivered")
+                print(f"[callback] job {job_id}: delivered (HTTP {r.status_code})",
+                      flush=True)
                 return
             last = f"HTTP {r.status_code}"
         except requests.RequestException as e:
@@ -412,8 +417,12 @@ def _send_video_callback(callback_url, job_id, status, video_path=None, error=No
             if opened:
                 opened.close()
         _set(job_id, video_callback=f"retry {attempt} ({last})")
-        time.sleep(delay)
-        delay *= 2
+        print(f"[callback] job {job_id}: attempt {attempt}/4 failed ({last})"
+              + (f"; retry in {delay:.0f}s" if attempt < 4 else ""), flush=True)
+        if attempt < 4:
+            time.sleep(delay)
+            delay *= 2
+    print(f"[callback] job {job_id}: GAVE UP after 4 attempts ({last})", flush=True)
     _set(job_id, video_callback=f"failed after retries ({last})")
 
 
@@ -423,6 +432,7 @@ def run_submit(job_id, image_url, callback_url, seed=None):
     run = RUNS_DIR / job_id
     run.mkdir(parents=True, exist_ok=True)
     t_start = time.monotonic()
+    print(f"[submit] job {job_id}: start (image_url={image_url})", flush=True)
     try:
         _set(job_id, status="running", stage="fetching image")
         image_path = run / "reference.png"
@@ -433,9 +443,12 @@ def run_submit(job_id, image_url, callback_url, seed=None):
         timings["total_s"] = round(time.monotonic() - t_start, 2)
         _set(job_id, status="done", progress=1.0, stage="done", timings=timings,
              combined_url=f"/api/rotate/result/{job_id}/combined")
+        print(f"[submit] job {job_id}: render done in {timings['total_s']}s "
+              f"(inference {timings.get('inference_s')}s)", flush=True)
         _send_video_callback(callback_url, job_id, "SUCCESS",
                              video_path=run / "combined.mp4")
     except Exception as e:  # noqa: BLE001
+        print(f"[submit] job {job_id}: FAILED: {e}", flush=True)
         _set(job_id, status="error", error=str(e),
              timings={"total_s": round(time.monotonic() - t_start, 2)})
         _send_video_callback(callback_url, job_id, "FAILED", error=str(e))
