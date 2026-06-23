@@ -58,7 +58,8 @@ CALLBACK_SECRET = os.environ.get("CALLBACK_SECRET", "")
 # --- asset-service /submit contract -----------------------------------------
 # shared secret sent as X-Internal-Auth on the result callback (same secret the
 # image box uses for /v1/vton/result).
-ASSET_INTERNAL_SECRET = os.environ.get("ASSET_INTERNAL_SECRET", "")
+ASSET_INTERNAL_SECRET = os.environ.get(
+    "ASSET_INTERNAL_SECRET", "supersecret-internal-token")
 # The box IGNORES the callback_url in the /submit request and POSTs the result to
 # this configured target instead (the asset-service IP keeps changing, so it is
 # pinned on the box; its port 9009 + /v1/video/result path stay constant). Set the
